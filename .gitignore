@@ -1,0 +1,26 @@
+# Dependencies
+extensions/node_modules/
+node_modules/
+
+# Sessions (chat history - can be large and personal)
+sessions/
+
+# Pi internal cache/state
+.pi-cache/
+*.db
+*.db-shm
+*.db-wal
+bin/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (shouldn't be here, but just in case)
+.env
+*.key
+auth.json
+
+# Local stuff
+TODO.md
+PLAN.md

@@ -1,0 +1,12 @@
+{
+  "name": "pi-extensions",
+  "private": true,
+  "dependencies": {
+    "@shikijs/cli": "^4.0.2",
+    "diff": "^7.0.0",
+    "typebox": "^1.1.24"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2"
+  }
+}

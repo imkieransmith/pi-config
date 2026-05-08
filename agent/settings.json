@@ -1,0 +1,9 @@
+{
+  "lastChangelogVersion": "0.74.0",
+  "editorPaddingX": 4,
+  "theme": "light",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.5",
+  "defaultThinkingLevel": "high",
+  "quietStartup": true
+}
