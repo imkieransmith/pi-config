@@ -29,6 +29,11 @@ const EFFORT_HEADER_PROSE =
 	"Choose the reasoning effort level for the advisor. " +
 	"Higher levels produce stronger judgment but use more tokens.";
 
+const CONTEXT_MODE_HEADER_TITLE = "Advisor Context";
+const CONTEXT_MODE_HEADER_PROSE =
+	"Choose how much of the current branch is forwarded when the advisor tool is called. " +
+	"Diagnostic sends a bounded text extract by default; full branch and nuclear send raw history and can be expensive.";
+
 function selectListTheme(theme: Theme) {
 	return {
 		selectedPrefix: (t: string) => theme.bg("selectedBg", theme.fg("accent", t)),
@@ -99,6 +104,33 @@ export async function showEffortPicker(
 		selectList.onCancel = () => done(null);
 
 		const container = buildSelectPanel(theme, EFFORT_HEADER_TITLE, [EFFORT_HEADER_PROSE], selectList);
+
+		return {
+			render: (w) => container.render(w),
+			invalidate: () => container.invalidate(),
+			handleInput: (data) => {
+				selectList.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	});
+}
+
+export async function showContextModePicker(
+	ctx: ExtensionContext,
+	items: SelectItem[],
+	currentMode: string,
+): Promise<string | null> {
+	return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+		const selectList = new SelectList(items, Math.min(items.length, MAX_VISIBLE_ROWS), selectListTheme(theme));
+		const preferredIdx = items.findIndex((item) => item.value === currentMode);
+		if (preferredIdx >= 0) {
+			selectList.setSelectedIndex(preferredIdx);
+		}
+		selectList.onSelect = (item) => done(item.value);
+		selectList.onCancel = () => done(null);
+
+		const container = buildSelectPanel(theme, CONTEXT_MODE_HEADER_TITLE, [CONTEXT_MODE_HEADER_PROSE], selectList);
 
 		return {
 			render: (w) => container.render(w),
