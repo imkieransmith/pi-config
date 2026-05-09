@@ -62,6 +62,9 @@ const CHECKMARK = " ✓";
 const MSG_ADVISOR_DISABLED = "Advisor disabled";
 const MSG_REQUIRES_INTERACTIVE = "/advisor requires interactive mode";
 const MSG_ADVISOR_NUDGE = "Please advise on the executor's situation above.";
+const MSG_ADVISOR_PERMISSION_TITLE = "Allow advisor call?";
+const MSG_ADVISOR_PERMISSION_DENIED = "Advisor call blocked by the user: this problem doesn't require escalation to the advisor yet, have another go at it yourself, think through the problem carefully, what has been missed? Why?";
+const MSG_ADVISOR_PERMISSION_NO_UI = "Advisor call requires user approval (no UI to confirm)";
 
 // Errors (static)
 const ERR_NO_MODEL = "No advisor model is configured. The user can enable one with the /advisor command.";
@@ -86,6 +89,14 @@ const msgAdvisorRestored = (label: string, effort: ThinkingLevel | undefined) =>
     `Advisor restored: ${label}${effort ? `, ${effort}` : ""}`;
 const msgConsulting = (label: string, effort: ThinkingLevel | undefined) =>
     `Consulting advisor (${label}${effort ? `, ${effort}` : ""})…`;
+const msgAdvisorPermissionDetail = (label: string | undefined, effort: ThinkingLevel | undefined) => {
+    const target = label ? `Advisor model: ${label}${effort ? ` (${effort})` : ""}.` : "No advisor model is currently selected.";
+    return [
+        "The agent wants to consult the advisor tool.",
+        target,
+        "The full conversation history and tool results will be forwarded to the advisor model.",
+    ].join("\n\n");
+};
 
 // ---------------------------------------------------------------------------
 // Config file persistence (cross-session)
@@ -468,6 +479,32 @@ export function registerAdvisorTool(pi: ExtensionAPI): void {
         async execute(_toolCallId, _params, signal, onUpdate, ctx) {
             return executeAdvisor(ctx, pi, signal, onUpdate);
         },
+    });
+}
+
+// ---------------------------------------------------------------------------
+// tool_call handler — ask user before spending advisor tokens / forwarding context
+// ---------------------------------------------------------------------------
+
+export function registerAdvisorPermissionGate(pi: ExtensionAPI): void {
+    pi.on("tool_call", async (event, ctx) => {
+        if (event.toolName !== ADVISOR_TOOL_NAME) return undefined;
+
+        const advisor = getAdvisorModel();
+        const label = advisor ? `${advisor.provider}:${advisor.id}` : undefined;
+        const effort = getAdvisorEffort();
+
+        if (!ctx.hasUI) {
+            return { block: true, reason: MSG_ADVISOR_PERMISSION_NO_UI };
+        }
+
+        const ok = await ctx.ui.confirm(MSG_ADVISOR_PERMISSION_TITLE, msgAdvisorPermissionDetail(label, effort));
+        if (!ok) {
+            ctx.ui.notify(MSG_ADVISOR_PERMISSION_DENIED, "warning");
+            return { block: true, reason: MSG_ADVISOR_PERMISSION_DENIED };
+        }
+
+        return undefined;
     });
 }
 
