@@ -172,6 +172,11 @@ function isPiPlanningNote(absPath: string, home: string): boolean {
   return absPath === path.join(home, ".pi", "PLAN.md") || absPath === path.join(home, ".pi", "TODO.md");
 }
 
+/** TODO.md files are AI scratchpads and should never be gated. */
+function isTodoPlanningNote(absPath: string): boolean {
+  return path.basename(absPath).toLowerCase() === "todo.md";
+}
+
 /** These files can turn later ordinary commands into arbitrary code execution. */
 function securitySensitiveMutation(absPath: string): string | undefined {
   const base = path.basename(absPath);
@@ -217,6 +222,10 @@ async function classifyPath(
   const cwd = await resolveToolPath(".", ctx);
   const home = os.homedir();
   const protectedPi = path.join(home, ".pi");
+
+  if (isTodoPlanningNote(absPath)) {
+    return ALLOW;
+  }
 
   if (isInside(path.join(home, ".ssh"), absPath)) {
     return block(`${intent} of SSH secrets`, rawPath);
