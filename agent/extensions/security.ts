@@ -75,6 +75,7 @@ const shellSecretPathRules: Rule[] = [
 
 const sensitiveReadCommands = /\b(?:cat|sed|awk|grep|rg|head|tail|less|more|nl|strings|xxd|od|cp|mv|install|tee|sponge|tar|zip|gzip|base64|openssl|curl|rsync|scp|python3?|node|ruby|perl|php)\b/i;
 const shellWriteOperators = /(?:^|[^<>])>>?\s*|(?:\|\s*)?(?:tee|sponge|cp|mv|install)\b/i;
+const shellWordPattern = /"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+/g;
 
 /** Notify only when Pi is running with an interactive UI. */
 function notify(ctx: ExtensionContext, message: string): void {
@@ -175,6 +176,37 @@ function isPiPlanningNote(absPath: string, home: string): boolean {
 /** TODO.md files are AI scratchpads and should never be gated. */
 function isTodoPlanningNote(absPath: string): boolean {
   return path.basename(absPath).toLowerCase() === "todo.md";
+}
+
+function cleanShellWord(word: string): string {
+  let cleaned = word.trim();
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    cleaned = cleaned.slice(1, -1);
+  }
+  return cleaned
+    .replace(/^[<>]+/, "")
+    .replace(/[),;]+$/, "")
+    .trim();
+}
+
+function shellFileReferences(command: string): string[] {
+  const words = command.match(shellWordPattern) ?? [];
+  return words
+    .map(cleanShellWord)
+    .filter((word) => /(?:^|\/)[^\/]*\.[A-Za-z0-9][A-Za-z0-9_-]*$/.test(word));
+}
+
+function shellPiReferencesArePlanningNotes(command: string): boolean {
+  const piRefs = shellFileReferences(command).filter((word) => pathSegments(word).includes(".pi"));
+  return piRefs.length > 0 && piRefs.every((word) => isTodoPlanningNote(word) || path.basename(word) === "PLAN.md");
+}
+
+function shellRewriteTargetsOnlyTodo(command: string): boolean {
+  const refs = shellFileReferences(command);
+  return refs.some(isTodoPlanningNote) && refs.every(isTodoPlanningNote);
 }
 
 /** These files can turn later ordinary commands into arbitrary code execution. */
@@ -298,12 +330,16 @@ function classifyBash(command: string): Decision {
 
   for (const rule of shellSecretPathRules) {
     if (rule.pattern.test(command) && (sensitiveReadCommands.test(command) || shellWriteOperators.test(command))) {
+      if (rule.reason === "Pi configuration" && shellPiReferencesArePlanningNotes(command)) continue;
       return block(`bash touches protected path: ${rule.reason}`, command);
     }
   }
 
   for (const rule of confirmBashRules) {
-    if (rule.pattern.test(command)) return confirm(rule.reason, command);
+    if (rule.pattern.test(command)) {
+      if (rule.reason === "in-place file rewrite" && shellRewriteTargetsOnlyTodo(command)) continue;
+      return confirm(rule.reason, command);
+    }
   }
 
   return ALLOW;
