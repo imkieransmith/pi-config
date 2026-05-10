@@ -2,9 +2,9 @@
  * advisor tool + /advisor command — Advisor-strategy pattern.
  *
  * Lets the executor model consult a stronger advisor model (e.g. Opus) via an
- * in-process completeSimple() call with a bounded diagnostic extract by default,
- * or an explicit full-branch payload when selected. Advisor has no tools, never emits user-facing output, and returns
- * guidance (plan, correction, or stop signal) that the executor resumes with.
+ * in-process completeSimple() call with a bounded diagnostic payload. Advisor
+ * has no tools, never emits user-facing output, and returns guidance (plan,
+ * correction, or stop signal) that the executor resumes with.
  *
  * Default state is OFF — the tool is registered at load but a before_agent_start
  * handler strips it from the active tool list each turn while no advisor model
@@ -17,7 +17,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Api, Model, StopReason, Usage } from "@earendil-works/pi-ai";
+import type { Api, ImageContent, Model, StopReason, TextContent, Usage } from "@earendil-works/pi-ai";
 import { completeSimple, getSupportedThinkingLevels, type Message, type ThinkingLevel } from "@earendil-works/pi-ai";
 import {
     type AgentToolResult,
@@ -30,7 +30,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { showAdvisorPicker, showContextModePicker, showEffortPicker } from "./advisor-ui.js";
+import { showAdvisorPicker, showEffortPicker } from "./advisor-ui.js";
 
 // ---------------------------------------------------------------------------
 // Constants — grouped by concern, flat named consts (no namespaced objects)
@@ -49,9 +49,9 @@ const CONFIG_FILE_MODE = 0o600;
 const NO_ADVISOR_VALUE = "__no_advisor__";
 const OFF_VALUE = "__off__";
 
-// Context modes
-export type AdvisorContextMode = "diagnostic" | "full_branch" | "nuclear";
-const DEFAULT_CONTEXT_MODE: AdvisorContextMode = "diagnostic";
+// Diagnostic payload limits
+export type AdvisorContextMode = "diagnostic";
+const DIAGNOSTIC_CONTEXT_MODE: AdvisorContextMode = "diagnostic";
 const DIAGNOSTIC_MESSAGE_BUDGET = 24;
 const DIAGNOSTIC_CHAR_BUDGET = 60_000;
 const DIAGNOSTIC_TEXT_PART_CHAR_LIMIT = 12_000;
@@ -93,34 +93,27 @@ const errCallFailed = (err: string | undefined) => `Advisor call failed: ${err ?
 const errCallThrew = (msg: string) => `Advisor call threw: ${msg}`;
 const errSelectionNotFound = (choice: string) => `Advisor selection not found: ${choice}`;
 const errModelUnavailable = (key: string) => `Previously configured advisor model ${key} is no longer available`;
-const msgAdvisorEnabled = (label: string, effort: ThinkingLevel | undefined, mode: AdvisorContextMode) =>
-    `Advisor: ${label}${effort ? `, ${effort}` : ""}, ${contextModeLabel(mode)}`;
-const msgAdvisorRestored = (label: string, effort: ThinkingLevel | undefined, mode: AdvisorContextMode) =>
-    `Advisor restored: ${label}${effort ? `, ${effort}` : ""}, ${contextModeLabel(mode)}`;
-const msgConsulting = (
-    label: string,
-    effort: ThinkingLevel | undefined,
-    mode: AdvisorContextMode,
-    stats: AdvisorPayloadStats,
-) =>
-    `Consulting advisor (${label}${effort ? `, ${effort}` : ""}, ${contextModeLabel(mode)}) — ${stats.messageCount} messages, ~${stats.approxTokens.toLocaleString()} rough tokens…`;
+const msgAdvisorEnabled = (label: string, effort: ThinkingLevel | undefined) =>
+    `Advisor: ${label}${effort ? `, ${effort}` : ""}, diagnostic payload`;
+const msgAdvisorRestored = (label: string, effort: ThinkingLevel | undefined) =>
+    `Advisor restored: ${label}${effort ? `, ${effort}` : ""}, diagnostic payload`;
+const msgConsulting = (label: string, effort: ThinkingLevel | undefined, stats: AdvisorPayloadStats) =>
+    `Consulting advisor (${label}${effort ? `, ${effort}` : ""}, diagnostic payload) — ${stats.messageCount} messages, ~${stats.approxTokens.toLocaleString()} rough tokens…`;
 const msgAdvisorPermissionDetail = (
     label: string | undefined,
     effort: ThinkingLevel | undefined,
-    mode: AdvisorContextMode,
     stats: AdvisorPayloadStats,
 ) => {
     const target = label ? `Advisor model: ${label}${effort ? ` (${effort})` : ""}.` : "No advisor model is currently selected.";
     return [
         "The agent wants to consult the advisor tool.",
         target,
-        `Context mode: ${contextModeLabel(mode)}. ${contextModeWarning(mode)}`,
+        "Payload: diagnostic-only bounded context extract with recent trace summary.",
         `Preflight estimate: ${stats.messageCount} messages, ${stats.chars.toLocaleString()} chars, ~${stats.approxTokens.toLocaleString()} rough tokens.`,
         `Breakdown: ${stats.inventoryChars.toLocaleString()} inventory chars, ${stats.contextChars.toLocaleString()} context chars.`,
         `Inventory: ${stats.activeToolCount} active executor tools${stats.inventoryIncluded ? "" : " (none forwarded)"}; advisor itself is excluded.`,
-        mode === "diagnostic"
-            ? `Diagnostic extract: ${stats.forwardedBranchMessageCount}/${stats.branchMessageCount} branch messages represented; ${stats.diagnosticOmittedBranchMessages.toLocaleString()} older messages omitted; ${stats.diagnosticTruncated ? "large content was truncated" : "no truncation needed"}.`
-            : `Full branch: ${stats.forwardedBranchMessageCount}/${stats.branchMessageCount} branch messages forwarded.`,
+        `Diagnostic extract: ${stats.forwardedBranchMessageCount}/${stats.branchMessageCount} branch messages represented; ${stats.diagnosticOmittedBranchMessages.toLocaleString()} older messages omitted; ${stats.diagnosticTruncated ? "large content was truncated" : "no truncation needed"}.`,
+        `Latest user images forwarded: ${stats.latestUserImageCount.toLocaleString()} image(s) from ${stats.latestUserImageMessageCount.toLocaleString()} latest user message(s).`,
     ].join("\n\n");
 };
 
@@ -131,7 +124,6 @@ const msgAdvisorPermissionDetail = (
 interface AdvisorConfig {
     modelKey?: string;
     effort?: ThinkingLevel;
-    contextMode?: AdvisorContextMode;
 }
 
 export function loadAdvisorConfig(): AdvisorConfig {
@@ -143,15 +135,10 @@ export function loadAdvisorConfig(): AdvisorConfig {
     }
 }
 
-export function saveAdvisorConfig(
-    key: string | undefined,
-    effort: ThinkingLevel | undefined,
-    contextMode: AdvisorContextMode | undefined,
-): void {
+export function saveAdvisorConfig(key: string | undefined, effort: ThinkingLevel | undefined): void {
     const config: AdvisorConfig = {};
     if (key) config.modelKey = key;
     if (effort) config.effort = effort;
-    if (contextMode) config.contextMode = contextMode;
     try {
         mkdirSync(dirname(ADVISOR_CONFIG_PATH), { recursive: true });
         writeFileSync(ADVISOR_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
@@ -169,30 +156,6 @@ function parseModelKey(key: string): { provider: string; modelId: string } | und
     const idx = key.indexOf(":");
     if (idx < 1) return undefined;
     return { provider: key.slice(0, idx), modelId: key.slice(idx + 1) };
-}
-
-function isAdvisorContextMode(value: unknown): value is AdvisorContextMode {
-    return value === "full_branch" || value === "nuclear" || value === "diagnostic";
-}
-
-function normalizeContextMode(value: string | undefined): AdvisorContextMode {
-    return isAdvisorContextMode(value) ? value : DEFAULT_CONTEXT_MODE;
-}
-
-function contextModeLabel(mode: AdvisorContextMode): string {
-    if (mode === "full_branch") return "full branch";
-    if (mode === "nuclear") return "nuclear";
-    return "diagnostic";
-}
-
-function contextModeWarning(mode: AdvisorContextMode): string {
-    if (mode === "diagnostic") {
-        return "Diagnostic mode forwards a bounded text extract of recent context. If that is insufficient, rerun in full-branch mode.";
-    }
-    if (mode === "nuclear") {
-        return "NUCLEAR mode forwards the whole sanitized branch and is intended for premium-model, high-cost escalation only.";
-    }
-    return "Full-branch mode forwards the whole sanitized branch. This can be expensive.";
 }
 
 // ---------------------------------------------------------------------------
@@ -274,23 +237,6 @@ export function stripInflightAdvisorCall(messages: Message[]): Message[] {
     return [...messages.slice(0, -1), { ...last, content: filtered }];
 }
 
-// Some providers (recent Anthropic Claude models) reject payloads ending on an
-// assistant turn ("This model does not support assistant message prefill. The
-// conversation must end with a user message."). After stripInflightAdvisorCall
-// the tail can be assistant (e.g. the executor wrote thinking text before
-// calling advisor). Append a minimal user-role nudge to guarantee user-tail.
-export function ensureUserTailForAdvisor(messages: Message[]): Message[] {
-    if (messages.length === 0) return messages;
-    const last = messages[messages.length - 1];
-    if (last.role !== "assistant") return messages;
-    const nudge: Message = {
-        role: "user",
-        content: [{ type: "text", text: MSG_ADVISOR_NUDGE }],
-        timestamp: Date.now(),
-    };
-    return [...messages, nudge];
-}
-
 function activeToolInventory(pi: ExtensionAPI): ToolInfo[] {
     const activeToolNames = new Set(pi.getActiveTools().filter((name) => name !== ADVISOR_TOOL_NAME));
     return pi.getAllTools().filter((tool) => activeToolNames.has(tool.name));
@@ -333,7 +279,6 @@ export function getInventoryMessage(tools: ToolInfo[]): Message | undefined {
 
 let selectedAdvisor: Model<Api> | undefined;
 let selectedAdvisorEffort: ThinkingLevel | undefined;
-let selectedAdvisorContextMode: AdvisorContextMode = DEFAULT_CONTEXT_MODE;
 
 export function getAdvisorModel(): Model<Api> | undefined {
     return selectedAdvisor;
@@ -349,14 +294,6 @@ export function getAdvisorEffort(): ThinkingLevel | undefined {
 
 export function setAdvisorEffort(effort: ThinkingLevel | undefined): void {
     selectedAdvisorEffort = effort;
-}
-
-export function getAdvisorContextMode(): AdvisorContextMode {
-    return selectedAdvisorContextMode;
-}
-
-export function setAdvisorContextMode(mode: AdvisorContextMode): void {
-    selectedAdvisorContextMode = mode;
 }
 
 // ---------------------------------------------------------------------------
@@ -378,9 +315,7 @@ export function restoreAdvisorState(ctx: ExtensionContext, pi: ExtensionAPI): vo
         return;
     }
 
-    const contextMode = normalizeContextMode(config.contextMode);
     setAdvisorModel(model);
-    setAdvisorContextMode(contextMode);
     if (config.effort) {
         setAdvisorEffort(config.effort);
     }
@@ -391,7 +326,7 @@ export function restoreAdvisorState(ctx: ExtensionContext, pi: ExtensionAPI): vo
     }
 
     if (ctx.hasUI) {
-        ctx.ui.notify(msgAdvisorRestored(`${model.provider}:${model.id}`, config.effort, contextMode), "info");
+        ctx.ui.notify(msgAdvisorRestored(`${model.provider}:${model.id}`, config.effort), "info");
     }
 }
 
@@ -412,6 +347,8 @@ export interface AdvisorPayloadStats {
     diagnosticOmittedBranchMessages: number;
     diagnosticTruncated: boolean;
     inventoryIncluded: boolean;
+    latestUserImageCount: number;
+    latestUserImageMessageCount: number;
 }
 
 export interface AdvisorPayload {
@@ -536,6 +473,166 @@ function userMessageText(message: Message, maxChars: number): RenderedText {
     return { text, truncated };
 }
 
+function flattenForSummary(text: string): string {
+    return text.replace(/\s+/g, " ").trim();
+}
+
+function latestUserMessage(messages: Message[]): Message | undefined {
+    return [...messages].reverse().find((message) => message.role === "user");
+}
+
+function latestAssistantMessage(messages: Message[]): Message | undefined {
+    return [...messages].reverse().find((message) => message.role === "assistant");
+}
+
+function assistantSummary(message: Message, maxChars: number): RenderedText {
+    if (message.role !== "assistant") return { text: "", truncated: false };
+    let truncated = false;
+    const parts = message.content.map((part) => {
+        const rendered = renderAssistantPart(part);
+        truncated ||= rendered.truncated;
+        return flattenForSummary(rendered.text);
+    });
+    const rendered = truncateText(parts.join(" | ") || "(assistant message has no text/tool-call parts)", maxChars);
+    return { text: rendered.text, truncated: truncated || rendered.truncated };
+}
+
+function toolResultSummary(message: Message, maxChars: number): RenderedText {
+    if (message.role !== "toolResult") return { text: "", truncated: false };
+    let truncated = false;
+    const parts = message.content.map((part) => {
+        const rendered = renderTextOrImagePart(part, maxChars);
+        truncated ||= rendered.truncated;
+        return flattenForSummary(rendered.text);
+    });
+    const details = message.details === undefined ? undefined : renderUnknown(message.details, Math.min(maxChars, 800));
+    if (details?.truncated) truncated = true;
+    const rendered = truncateText(
+        [`${message.toolName} ${message.isError ? "error" : "ok"}`, parts.join(" | "), details ? `details: ${flattenForSummary(details.text)}` : undefined]
+            .filter((line): line is string => Boolean(line))
+            .join(" — "),
+        maxChars,
+    );
+    return { text: rendered.text, truncated: truncated || rendered.truncated };
+}
+
+function messageSummary(message: Message, absoluteIndex: number, maxChars: number): RenderedText {
+    if (message.role === "user") {
+        const rendered = userMessageText(message, maxChars);
+        return { text: `#${absoluteIndex + 1} USER — ${flattenForSummary(rendered.text) || "(empty)"}`, truncated: rendered.truncated };
+    }
+    if (message.role === "assistant") {
+        const rendered = assistantSummary(message, maxChars);
+        return { text: `#${absoluteIndex + 1} ASSISTANT — ${rendered.text}`, truncated: rendered.truncated };
+    }
+    const rendered = toolResultSummary(message, maxChars);
+    return { text: `#${absoluteIndex + 1} TOOL RESULT — ${rendered.text}`, truncated: rendered.truncated };
+}
+
+function recentActivitySummary(messages: Message[], maxMessages = 8): RenderedText {
+    const start = Math.max(0, messages.length - maxMessages);
+    let truncated = false;
+    const lines = messages.slice(start).map((message, idx) => {
+        const rendered = messageSummary(message, start + idx, 900);
+        truncated ||= rendered.truncated;
+        return `- ${rendered.text}`;
+    });
+    return { text: lines.join("\n") || "- (no recent activity)", truncated };
+}
+
+function buildAdvisorBrief(messages: Message[], cwd: string): RenderedText {
+    let truncated = false;
+    const latestUser = latestUserMessage(messages);
+    const latestUserText = latestUser ? userMessageText(latestUser, 2_000) : undefined;
+    if (latestUserText?.truncated) truncated = true;
+
+    const latestAssistant = latestAssistantMessage(messages);
+    const latestAssistantText = latestAssistant ? assistantSummary(latestAssistant, 2_000) : undefined;
+    if (latestAssistantText?.truncated) truncated = true;
+
+    const recent = recentActivitySummary(messages);
+    if (recent.truncated) truncated = true;
+
+    const text = [
+        "## Advisor Brief",
+        `Current working directory: ${cwd}`,
+        "Advisor trigger: the executor explicitly called the advisor tool during the current turn. Treat this as a request for corrective guidance based on the trace below, not as a user-facing response.",
+        latestUserText ? `Latest user request:\n${latestUserText.text || "(empty)"}` : "Latest user request: (none found)",
+        latestAssistantText ? `Latest executor state before advisor call:\n${latestAssistantText.text}` : "Latest executor state before advisor call: (none found)",
+        `Recent activity summary:\n${recent.text}`,
+    ].join("\n\n");
+
+    const rendered = truncateText(text, 8_000);
+    return { text: rendered.text, truncated: truncated || rendered.truncated };
+}
+
+interface LatestUserImagesResult {
+    message?: Message;
+    imageCount: number;
+    sourceMessageCount: number;
+}
+
+function isImageContent(part: unknown): part is ImageContent {
+    const record = asRecord(part);
+    return record.type === "image" && typeof record.data === "string" && typeof record.mimeType === "string";
+}
+
+function latestUserMessageRange(messages: Message[]): { start: number; end: number } | undefined {
+    const end = (() => {
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+            if (messages[i]?.role === "user") return i;
+        }
+        return -1;
+    })();
+    if (end < 0) return undefined;
+
+    let start = end;
+    while (start > 0 && messages[start - 1]?.role === "user") {
+        start -= 1;
+    }
+    return { start, end };
+}
+
+function buildLatestUserImagesMessage(messages: Message[]): LatestUserImagesResult {
+    const range = latestUserMessageRange(messages);
+    if (!range) return { imageCount: 0, sourceMessageCount: 0 };
+
+    const content: Array<TextContent | ImageContent> = [];
+    const sourceLabels: string[] = [];
+    let imageCount = 0;
+    let sourceMessageCount = 0;
+
+    for (let index = range.start; index <= range.end; index += 1) {
+        const message = messages[index];
+        if (!message || message.role !== "user" || typeof message.content === "string") continue;
+        const images = message.content.filter(isImageContent);
+        if (images.length === 0) continue;
+        sourceMessageCount += 1;
+        sourceLabels.push(`#${index + 1} (${images.length} image${images.length === 1 ? "" : "s"})`);
+        for (const image of images) {
+            content.push(image);
+            imageCount += 1;
+        }
+    }
+
+    if (imageCount === 0) return { imageCount: 0, sourceMessageCount: 0 };
+
+    content.unshift({
+        type: "text",
+        text: [
+            "## Latest User Message Images",
+            `Forwarding ${imageCount.toLocaleString()} image(s) attached to the latest user message(s): ${sourceLabels.join(", ")}.`,
+            "These images are part of the user request. The diagnostic text trace contains only placeholders for them; inspect the attached image content directly when giving guidance.",
+        ].join("\n"),
+    });
+
+    return {
+        message: { role: "user", content, timestamp: Date.now() },
+        imageCount,
+        sourceMessageCount,
+    };
+}
+
 function renderDiagnosticMessage(message: Message, absoluteIndex: number): RenderedText {
     let truncated = false;
     let body: string;
@@ -576,10 +673,13 @@ function renderDiagnosticMessage(message: Message, absoluteIndex: number): Rende
     };
 }
 
-function buildDiagnosticContextMessage(messages: Message[]): DiagnosticContextResult {
+function buildDiagnosticContextMessage(messages: Message[], cwd: string): DiagnosticContextResult {
     const tailStart = Math.max(0, messages.length - DIAGNOSTIC_MESSAGE_BUDGET);
     const tail = messages.slice(tailStart);
     let truncated = false;
+
+    const advisorBrief = buildAdvisorBrief(messages, cwd);
+    if (advisorBrief.truncated) truncated = true;
 
     const priorUser = tail.some((message) => message.role === "user")
         ? undefined
@@ -604,10 +704,11 @@ function buildDiagnosticContextMessage(messages: Message[]): DiagnosticContextRe
 
     const omittedCount = Math.max(0, messages.length - representedCount);
     const header = [
-        "## Diagnostic Context Extract",
-        "This is a bounded, text-only extract of the recent executor trace. Older messages and large tool outputs may be omitted or truncated to control advisor cost.",
+        advisorBrief.text,
+        "## Diagnostic Payload Limits",
+        "This is a bounded diagnostic extract, not a raw transcript. Older messages, large tool outputs, long details, and non-latest images may be omitted or truncated to control advisor cost. Treat omissions as uncertainty and ask the executor for specific missing facts if needed.",
         `Raw branch messages: ${messages.length.toLocaleString()}. Represented recent messages: ${representedCount.toLocaleString()}. Omitted older messages: ${omittedCount.toLocaleString()}.`,
-        priorUserText?.text ? `## Most Recent Prior User Message\n${priorUserText.text}` : undefined,
+        priorUserText?.text ? `## Most Recent Prior User Message Outside Recent Trace\n${priorUserText.text}` : undefined,
         "## Recent Trace",
     ].filter((line): line is string => line !== undefined);
 
@@ -636,6 +737,8 @@ function roughPayloadStats(
     forwardedBranchMessageCount: number,
     diagnosticOmittedBranchMessages: number,
     diagnosticTruncated: boolean,
+    latestUserImageCount: number,
+    latestUserImageMessageCount: number,
 ): AdvisorPayloadStats {
     const chars = JSON.stringify({ systemPrompt: ADVISOR_SYSTEM_PROMPT, messages, tools: [] }).length;
     const inventoryChars = inventoryMessage ? JSON.stringify([inventoryMessage]).length : 0;
@@ -653,6 +756,8 @@ function roughPayloadStats(
         diagnosticOmittedBranchMessages,
         diagnosticTruncated,
         inventoryIncluded: Boolean(inventoryMessage),
+        latestUserImageCount,
+        latestUserImageMessageCount,
     };
 }
 
@@ -661,7 +766,7 @@ export function buildAdvisorPayload(ctx: ExtensionContext, pi: ExtensionAPI): Ad
     // is always one turn stale. convertToLlm is pass-through for user/assistant/
     // toolResult (messages.js:111-114), so element refs are stable across calls
     // via the session store — content-stable output without a snapshot layer.
-    const mode = getAdvisorContextMode();
+    const mode = DIAGNOSTIC_CONTEXT_MODE;
     const branch = ctx.sessionManager.getBranch();
     const agentMessages = branch
         .filter((e): e is SessionEntry & { type: "message" } => e.type === "message")
@@ -670,24 +775,16 @@ export function buildAdvisorPayload(ctx: ExtensionContext, pi: ExtensionAPI): Ad
     const activeTools = activeToolInventory(pi);
     const inventoryMessage = getInventoryMessage(activeTools);
 
-    let contextMessages: Message[];
-    let forwardedBranchMessageCount: number;
-    let diagnosticOmittedBranchMessages = 0;
-    let diagnosticTruncated = false;
-
-    if (mode === "diagnostic") {
-        const diagnostic = buildDiagnosticContextMessage(sanitizedBranchMessages);
-        contextMessages = [
-            diagnostic.message,
-            { role: "user", content: [{ type: "text", text: MSG_ADVISOR_NUDGE }], timestamp: Date.now() },
-        ];
-        forwardedBranchMessageCount = diagnostic.representedCount;
-        diagnosticOmittedBranchMessages = diagnostic.omittedCount;
-        diagnosticTruncated = diagnostic.truncated;
-    } else {
-        contextMessages = ensureUserTailForAdvisor(sanitizedBranchMessages);
-        forwardedBranchMessageCount = contextMessages.length;
-    }
+    const diagnostic = buildDiagnosticContextMessage(sanitizedBranchMessages, ctx.cwd);
+    const latestUserImages = buildLatestUserImagesMessage(sanitizedBranchMessages);
+    const contextMessages: Message[] = [
+        diagnostic.message,
+        ...(latestUserImages.message ? [latestUserImages.message] : []),
+        { role: "user", content: [{ type: "text", text: MSG_ADVISOR_NUDGE }], timestamp: Date.now() },
+    ];
+    const forwardedBranchMessageCount = diagnostic.representedCount;
+    const diagnosticOmittedBranchMessages = diagnostic.omittedCount;
+    const diagnosticTruncated = diagnostic.truncated;
 
     const messages: Message[] = inventoryMessage ? [inventoryMessage, ...contextMessages] : contextMessages;
     const stats = roughPayloadStats(
@@ -700,6 +797,8 @@ export function buildAdvisorPayload(ctx: ExtensionContext, pi: ExtensionAPI): Ad
         forwardedBranchMessageCount,
         diagnosticOmittedBranchMessages,
         diagnosticTruncated,
+        latestUserImages.imageCount,
+        latestUserImages.sourceMessageCount,
     );
     return { messages, mode, stats };
 }
@@ -710,12 +809,11 @@ function buildErrorResult(
     errorMessage: string,
 ): AgentToolResult<AdvisorDetails> {
     const effort = getAdvisorEffort();
-    const contextMode = getAdvisorContextMode();
     return {
         content: [{ type: "text", text: userText }],
         details: advisorLabel
-            ? { advisorModel: advisorLabel, effort, contextMode, errorMessage }
-            : { effort, contextMode, errorMessage },
+            ? { advisorModel: advisorLabel, effort, contextMode: DIAGNOSTIC_CONTEXT_MODE, errorMessage }
+            : { effort, contextMode: DIAGNOSTIC_CONTEXT_MODE, errorMessage },
     };
 }
 
@@ -743,7 +841,7 @@ async function executeAdvisor(
     const payload = buildAdvisorPayload(ctx, pi);
 
     onUpdate?.({
-        content: [{ type: "text", text: msgConsulting(advisorLabel, effort, payload.mode, payload.stats) }],
+        content: [{ type: "text", text: msgConsulting(advisorLabel, effort, payload.stats) }],
         details: { advisorModel: advisorLabel, effort, contextMode: payload.mode, payloadStats: payload.stats },
     });
 
@@ -834,8 +932,8 @@ const ADVISOR_DESCRIPTION =
     "Escalate to a stronger reviewer model for guidance. When you need " +
     "stronger judgment — a complex decision, an ambiguous failure, a problem " +
     "you're circling without progress — escalate to the advisor model for " +
-    "guidance, then resume. Takes NO parameters — the extension forwards the " +
-    "configured context mode: bounded diagnostic by default, or raw full branch/nuclear when selected.";
+    "guidance, then resume. Takes NO parameters — the extension always forwards " +
+    "a bounded diagnostic payload with recent context.";
 
 const ADVISOR_PROMPT_SNIPPET =
     "Escalate to a stronger reviewer model for guidance when stuck, errors recurring, user reporting issues still happening.";
@@ -880,7 +978,7 @@ export function registerAdvisorPermissionGate(pi: ExtensionAPI): void {
 
         const ok = await ctx.ui.confirm(
             MSG_ADVISOR_PERMISSION_TITLE,
-            msgAdvisorPermissionDetail(label, effort, payload.mode, payload.stats),
+            msgAdvisorPermissionDetail(label, effort, payload.stats),
         );
         if (!ok) {
             ctx.ui.notify(MSG_ADVISOR_PERMISSION_DENIED, "warning");
@@ -948,8 +1046,7 @@ export function registerAdvisorCommand(pi: ExtensionAPI): void {
             if (choice === NO_ADVISOR_VALUE) {
                 setAdvisorModel(undefined);
                 setAdvisorEffort(undefined);
-                setAdvisorContextMode(DEFAULT_CONTEXT_MODE);
-                saveAdvisorConfig(undefined, undefined, undefined);
+                saveAdvisorConfig(undefined, undefined);
                 if (activeHas) {
                     pi.setActiveTools(activeTools.filter((n) => n !== ADVISOR_TOOL_NAME));
                 }
@@ -985,38 +1082,13 @@ export function registerAdvisorCommand(pi: ExtensionAPI): void {
                 effortChoice = effortResult === OFF_VALUE ? undefined : (effortResult as ThinkingLevel);
             }
 
-            const currentMode = getAdvisorContextMode();
-            const modeItems: SelectItem[] = [
-                {
-                    value: "diagnostic",
-                    label: `Diagnostic — bounded extract${currentMode === "diagnostic" ? CHECKMARK : ""}`,
-                    description: "Default. Text-only recent trace with hard message/output/char caps.",
-                },
-                {
-                    value: "full_branch",
-                    label: `Full branch — expensive exact trace${currentMode === "full_branch" ? CHECKMARK : ""}`,
-                    description: "Raw whole branch plus active tool inventory; can be very large.",
-                },
-                {
-                    value: "nuclear",
-                    label: `Nuclear — full branch + premium${currentMode === "nuclear" ? CHECKMARK : ""}`,
-                    description: "Raw whole branch for premium-model escalation; strongest warning before each call.",
-                },
-            ];
-            const modeResult = await showContextModePicker(ctx, modeItems, currentMode);
-            if (!modeResult) {
-                return;
-            }
-            const contextMode = normalizeContextMode(modeResult);
-
             setAdvisorEffort(effortChoice);
-            setAdvisorContextMode(contextMode);
             setAdvisorModel(picked);
-            saveAdvisorConfig(modelKey(picked), effortChoice, contextMode);
+            saveAdvisorConfig(modelKey(picked), effortChoice);
             if (!activeHas) {
                 pi.setActiveTools([...activeTools, ADVISOR_TOOL_NAME]);
             }
-            ctx.ui.notify(msgAdvisorEnabled(modelKey(picked), effortChoice, contextMode), "info");
+            ctx.ui.notify(msgAdvisorEnabled(modelKey(picked), effortChoice), "info");
         },
     });
 }
