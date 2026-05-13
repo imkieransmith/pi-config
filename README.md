@@ -5,6 +5,18 @@ A number of the extensions started from work shared by other Pi users. Where tha
 
 The code here is intended as a working personal config rather than a polished package, but it may be useful as a reference for building or adapting Pi extensions.
 
+## Install
+
+```bash
+pi install npm:kierans-pi-config
+```
+
+Or directly from GitHub:
+
+```bash
+pi install git:github.com/imkieransmith/pi-config
+```
+
 ## License
 
 MIT. Use it, adapt it, share it. Attribution for code that started from other Pi users is linked in the relevant source files.

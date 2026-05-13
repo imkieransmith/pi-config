@@ -1,11 +1,27 @@
 {
-  "name": "pi-extensions",
+  "name": "kierans-pi-config",
   "version": "0.1.0",
+  "description": "Kieran's Pi coding agent extensions, skills, and personal workflow config.",
   "license": "MIT",
-  "private": true,
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-skill",
+    "coding-agent"
   ],
+  "author": "Kieran Smith",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imkieransmith/pi-config.git"
+  },
+  "bugs": {
+    "url": "https://github.com/imkieransmith/pi-config/issues"
+  },
+  "homepage": "https://github.com/imkieransmith/pi-config#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "agent/extensions",
     "agent/skills",
