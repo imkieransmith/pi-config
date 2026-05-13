@@ -8,12 +8,6 @@ The code here is intended as a working personal config rather than a polished pa
 ## Install
 
 ```bash
-pi install npm:kierans-pi-config
-```
-
-Or directly from GitHub:
-
-```bash
 pi install git:github.com/imkieransmith/pi-config
 ```
 
