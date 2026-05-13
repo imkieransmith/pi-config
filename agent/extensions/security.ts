@@ -1,3 +1,8 @@
+/**
+ * Block dangerous commands, protect sensitive paths.
+ *
+ * Original - https://github.com/michalvavra/agents/blob/main/agents/pi/extensions/security.ts
+ */
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { realpath } from "node:fs/promises";
 import * as os from "node:os";

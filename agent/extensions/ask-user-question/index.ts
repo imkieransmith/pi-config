@@ -1,3 +1,8 @@
+/**
+ * Allows the model to ask the user questions, with the option for the user to type in an answer.
+ *
+ * Original - https://github.com/tomsej/pi-ext/tree/main/extensions/ask-user-question
+ */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Box, TruncatedText } from "@earendil-works/pi-tui";
 import { AskUserQuestionComponent } from "./component.ts";

@@ -1,16 +1,7 @@
 /**
  * Pi extension that uses `rtk rewrite` to optimize shell commands.
  *
- * The extension participates in two Pi execution paths:
- * - agent-initiated `bash` tool calls via a replacement bash tool
- * - user-issued `!<cmd>` shell commands via the `user_bash` event
- *
- * In both paths, optimization is best-effort: when `rtk rewrite` succeeds,
- * Pi executes the rewritten command; when rewrite fails, times out, or `rtk`
- * is unavailable, execution falls back to Pi's normal shell behavior.
- *
- * Commands entered with `!!<cmd>` are intentionally not intercepted so the
- * user's choice to exclude shell output from model context is preserved.
+ * Original - https://github.com/sherif-fanous/pi-rtk
  */
 
 import type { AgentToolResult, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";

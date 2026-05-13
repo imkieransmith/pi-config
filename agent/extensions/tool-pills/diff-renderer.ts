@@ -1,15 +1,3 @@
-/**
- * Diff renderer — Shiki-powered terminal diff for pi write/edit tools.
- *
- * Based on pi-diff by @heyhuynhgiabuu (https://github.com/buddingnewinsights/pi-diff)
- *
- * Architecture:
- *   1. Syntax-highlight full code blocks via Shiki → ANSI (fg-only codes)
- *   2. Layer diff background colors underneath (composites at cell level)
- *   3. For word-level changes, inject brighter bg at changed char positions
- *   4. Result: syntax fg + diff bg + word emphasis — all three visible together
- */
-
 import { existsSync, readFileSync } from "node:fs";
 import { extname, relative, resolve } from "node:path";
 

@@ -1,12 +1,9 @@
 /**
- * rpiv-advisor — Pi extension
+ * Allow the model to send a condensed/summarised package of the conversation to another model for guidance.
  *
- * Registers the `advisor` tool, `/advisor` command, and the two lifecycle
- * hooks (session_start restore, before_agent_start strip) that together
- * implement the advisor-strategy pattern.
+ * /advisor - pick the advisor model.
  *
- * Config persists at ~/.config/rpiv-advisor/advisor.json. Tool name
- * preserved verbatim from rpiv-pi@7525a5d.
+ * Original - https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-advisor
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

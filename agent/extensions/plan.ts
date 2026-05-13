@@ -1,3 +1,13 @@
+/**
+ * A tool to force the use of the plan skill and a context checkpoint.
+ * - An existing checkpoint will be saved with a comprehensive summary.
+ * - A new checkpoint will be created.
+ * - The write-plan skill is loaded in full.
+ *
+ * /plan [message] - store the checkpoint and build a new plan.
+ *
+ * Plan skill original - https://www.reddit.com/r/LocalLLaMA/comments/1stjwg5/been_using_pi_coding_agent_with_local_qwen36_35b/
+ */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   type ActiveCheckpoint,
@@ -33,7 +43,7 @@ function formatPlanHelp(): string {
     "Plan command",
     "",
     "/plan <message>",
-    "  Restore any active ContextSnapshot checkpoint, save a fresh checkpoint, load the plan-first skill, and forward <message> to the agent.",
+    "  Restore any active ContextSnapshot checkpoint, save a fresh checkpoint, load the write-plan skill, and forward <message> to the agent.",
     "",
     "Example:",
     "  /plan add OAuth refresh tests",
@@ -98,7 +108,7 @@ function formatPlanRestoreSummary(ctx: SnapshotContext, active: ActiveCheckpoint
     "Files: No file list was inferred automatically by /plan; consult the preserved recent conversation digest and prior tool results for exact paths.",
     "Recent conversation digest:",
     recentConversationDigest(ctx),
-    "Outstanding: Continue with the new /plan request after saving a fresh checkpoint and loading the plan-first skill.",
+    "Outstanding: Continue with the new /plan request after saving a fresh checkpoint and loading the write-plan skill.",
   ].join("\n");
 }
 
@@ -113,9 +123,9 @@ async function runPlanCommand(
     return;
   }
 
-  const planFirstCommand = pi.getCommands().find((command) => command.name === "skill:plan-first");
+  const planFirstCommand = pi.getCommands().find((command) => command.name === "skill:write-plan");
   if (!planFirstCommand) {
-    showCommandMessage(pi, "Cannot start /plan: plan-first skill is not currently loaded/discovered. Run /reload and try again.");
+    showCommandMessage(pi, "Cannot start /plan: write-plan skill is not currently loaded/discovered. Run /reload and try again.");
     return;
   }
 
@@ -131,14 +141,14 @@ async function runPlanCommand(
   const restoredText = restoredLabel ? `Restored previous checkpoint '${restoredLabel}', then ` : "";
   showCommandMessage(
     pi,
-    `${restoredText}saved fresh planning checkpoint ${checkpointId}. Forwarding request with plan-first loaded.`,
+    `${restoredText}saved fresh planning checkpoint ${checkpointId}. Forwarding request with write-plan loaded.`,
   );
-  pi.sendUserMessage(`/skill:plan-first ${request}`);
+  pi.sendUserMessage(`/skill:write-plan ${request}`);
 }
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("plan", {
-    description: "Start deterministic plan-first workflow with ContextSnapshot handoff. Usage: /plan <message>",
+    description: "Start deterministic write-plan workflow with ContextSnapshot handoff. Usage: /plan <message>",
     getArgumentCompletions: () => null,
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       await runPlanCommand(pi, args, ctx);

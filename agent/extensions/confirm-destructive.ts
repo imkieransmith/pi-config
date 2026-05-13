@@ -1,4 +1,8 @@
-// Confirm destructive tool calls before they run.
+/**
+ * Confirm destructive tool calls before they run.
+ *
+ * Original - https://github.com/spences10/my-pi/tree/main/packages/pi-confirm-destructive
+ */
 
 import type {
 	ExtensionAPI,

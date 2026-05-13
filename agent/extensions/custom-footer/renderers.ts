@@ -1,10 +1,3 @@
-/**
- * Pure rendering helpers for the custom footer.
- *
- * Each function produces a styled string segment — no side effects.
- * All colors are resolved via theme roles (no hardcoded ANSI).
- */
-
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 export type PermissionMode = "safe" | "read-only" | "yolo";

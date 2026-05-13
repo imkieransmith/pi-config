@@ -1,8 +1,5 @@
 /**
- * Resource Overview Extension.
- *
- * Shows a richer startup header for loaded skills and extensions, including
- * skill frontmatter descriptions and manifest-backed extension descriptions.
+ * Pi welcome resource overview. Shows a richer startup header for loaded skills and extensions.
  */
 
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";

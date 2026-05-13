@@ -1,16 +1,7 @@
 /**
- * Session Query Extension - Query previous pi sessions
+ * Allows the model to query past sessions for context, decisions, code changes, or other information.
  *
- * Provides a tool the model can use to query past sessions for context,
- * decisions, code changes, or other information.
- *
- * Uses a local transcript summary by default, preserving all user/assistant
- * text plus searchable extension state. Falls back to full serialized
- * conversation plus a raw entry appendix via `detailed: true` for queries that
- * need exact file contents or tool output.
- *
- * Works with handoff: when a handoff prompt includes "Parent session: <path>",
- * the model can use this tool to look up details from that session.
+ * Original - https://github.com/tomsej/pi-ext/tree/main/extensions/session-query
  */
 
 import { complete, type Message } from "@earendil-works/pi-ai";
@@ -236,12 +227,12 @@ export default function (pi: ExtensionAPI) {
 			"Query a previous pi session file for context, decisions, or information. Use when you need to look up what happened in a parent session or any other session.",
 		renderResult: (result, _options, theme, _ctx) => {
 			const container = new Container();
-			
+
 			const firstContent = result.content[0];
 			if (firstContent && firstContent.type === "text") {
 				const text = firstContent.text;
 				const match = text.match(/\*\*Query:\*\* (.+?)\n\n---\n\n([\s\S]+)/);
-				
+
 				if (match) {
 					const [, query, answer] = match;
 					container.addChild(new Text(theme.bold("Query: ") + theme.fg("accent", query), 0, 0));
@@ -253,7 +244,7 @@ export default function (pi: ExtensionAPI) {
 					container.addChild(new Text(theme.fg("toolOutput", text), 0, 0));
 				}
 			}
-			
+
 			return container;
 		},
 		parameters: Type.Object({

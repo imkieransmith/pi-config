@@ -1,11 +1,3 @@
-/**
- * Custom Footer Extension — compact powerline style.
- *
- * Replaces pi's default footer via ctx.ui.setFooter(). The footerData object
- * supplies the current git branch and a branch-change subscription, so this
- * extension does not need to import or depend on other local extensions.
- */
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {

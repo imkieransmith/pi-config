@@ -1,9 +1,17 @@
 /**
- * Context snapshot extension.
+ * Agent-controlled checkpoints whose summaries survive Pi's ordinary context compaction.
  *
- * Adds agent-controlled checkpoints whose summaries survive Pi's ordinary
- * context compaction because the durable state lives in custom session entries,
- * not in chat history.
+ * /context - Show this command reference and current snapshot status.
+ * /context help - Show this command reference.
+ * /context status - Show the active checkpoint, dirty state, and recent saved summaries.
+ * /context list - List saved durable summaries.
+ * /context save [label] - Start a checkpoint before a large investigation. Only one checkpoint can be active.
+ * /context cancel - Discard the active checkpoint without saving a summary.
+ * /context compact - Ask Pi to compact now. Saved context snapshots are preserved in the compaction summary.
+ *
+ * Agent tool equivalent: ContextSnapshot can save, restore, cancel, status, and list.
+ *
+ * Inspired by - https://swival.dev/pages/context-management.html
  */
 
 import type {

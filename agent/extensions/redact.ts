@@ -1,5 +1,8 @@
-// Filter-output extension — redact secrets from tool output
-// Patterns from https://github.com/spences10/nopeek
+/**
+ * Filter extension to redact secrets from tool output.
+ *
+ * Original - https://github.com/spences10/my-pi/tree/main/packages/pi-redact
+ */
 
 import type { ImageContent, TextContent } from '@earendil-works/pi-ai';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';

@@ -1,3 +1,8 @@
+/**
+ * Play a sound when the model is finished or waiting for user input.
+ *
+ * Original - https://github.com/adidoes/pi-meep
+ */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";

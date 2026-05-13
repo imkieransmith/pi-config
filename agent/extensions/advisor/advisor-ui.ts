@@ -1,10 +1,3 @@
-/**
- * advisor-ui — bordered select-panel builders for the /advisor command.
- *
- * The public picker functions share a private buildSelectPanel helper that
- * owns the bordered-container layout and the SelectList theme wiring.
- */
-
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import { DynamicBorder, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Spacer, Text } from "@earendil-works/pi-tui";

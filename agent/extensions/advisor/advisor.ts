@@ -1,18 +1,3 @@
-/**
- * advisor tool + /advisor command — Advisor-strategy pattern.
- *
- * Lets the executor model consult a stronger advisor model (e.g. Opus) via an
- * in-process completeSimple() call with a bounded diagnostic payload. Advisor
- * has no tools, never emits user-facing output, and returns guidance (plan,
- * correction, or stop signal) that the executor resumes with.
- *
- * Default state is OFF — the tool is registered at load but a before_agent_start
- * handler strips it from the active tool list each turn while no advisor model
- * is selected. /advisor opens a selector panel (ctx.ui.custom) to pick an
- * advisor model from ctx.modelRegistry.getAvailable() and toggles the tool in
- * via pi.setActiveTools(). Selection is in-memory and resets each session.
- */
-
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";

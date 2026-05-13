@@ -1,9 +1,7 @@
 /**
- * Tool Pills + Diff Renderer — combined extension.
+ * Coloured tool pills + diff renderer.
  *
- * • ls, read, find, grep → colored pill labels + collapsed output
- * • bash → rendered by rtk.ts when that extension owns the bash override
- * • write, edit → Shiki-powered syntax-highlighted diffs (from pi-diff)
+ * Original - https://github.com/tomsej/pi-ext/tree/main/extensions/tool-pills
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

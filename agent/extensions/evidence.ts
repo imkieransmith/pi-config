@@ -1,14 +1,12 @@
 /**
- * Evidence extension — durable store + compaction bridge.
+ * Allow the model to store and fetch evidence snippets to use as citations in answers.
  *
- * Provides three tools for the model to save citable evidence during a session:
- *   EvidenceAdd   – store a snippet with source + one-line note
- *   EvidenceGet   – retrieve a single entry by ID
- *   EvidenceList  – list all entries (ID, source, note)
+ * Agent tools:
+ * EvidenceAdd - store a snippet with source + one-line note.
+ * EvidenceGet - retrieve a single entry by ID.
+ * EvidenceList - list all entries (ID, source, note).
  *
- * Evidence entries are appended as custom session entries and hydrated from the
- * active branch, so they survive /reload and session resume just like ordinary
- * session history.
+ * Original - https://github.com/itayinbarr/little-coder/tree/main/.pi/extensions/evidence
  */
 
 import type {
