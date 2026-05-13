@@ -12,7 +12,7 @@ import type {
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
 
 export interface DestructiveAction {
 	title: string;
@@ -148,6 +148,10 @@ function is_agent_temp_path(path: string): boolean {
 		/[\\/]+/,
 	)[0];
 	return /^my-pi-(audit|sandbox|temp|tmp|work)-/.test(first_segment);
+}
+
+function is_todo_planning_note(path: string): boolean {
+	return basename(path).toLowerCase() === 'todo.md';
 }
 
 function parse_shell_words(command: string): string[] {
@@ -324,6 +328,7 @@ function assess_file_write(
 	session_created_paths: ReadonlySet<string> = new Set(),
 ): DestructiveAction | undefined {
 	if (typeof path !== 'string' || !path.trim()) return undefined;
+	if (is_todo_planning_note(path)) return undefined;
 	const absolute = resolve(cwd, path);
 	if (!existsSync(absolute)) return undefined;
 	if (session_created_paths.has(absolute)) return undefined;
@@ -365,6 +370,7 @@ function assess_file_edit(
 	if (removed_chars === 0 || removed_chars - added_chars < 200) {
 		return undefined;
 	}
+	if (path && is_todo_planning_note(path)) return undefined;
 	if (path && session_created_paths.has(resolve(cwd, path))) {
 		return undefined;
 	}
