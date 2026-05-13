@@ -1,12 +1,50 @@
 {
   "name": "pi-extensions",
+  "version": "0.1.0",
+  "license": "MIT",
   "private": true,
+  "keywords": [
+    "pi-package"
+  ],
+  "files": [
+    "agent/extensions",
+    "agent/skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./agent/extensions"
+    ],
+    "skills": [
+      "./agent/skills"
+    ]
+  },
   "dependencies": {
     "@shikijs/cli": "^4.0.2",
-    "diff": "^7.0.0",
-    "typebox": "^1.1.24"
+    "diff": "^9.0.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@types/diff": "^7.0.2"
+    "typebox": "^1.1.24"
   }
 }
