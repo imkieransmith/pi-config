@@ -116,12 +116,7 @@ Any constraints, decisions, or known risks recorded here.
 - Each task must be checkable as done/not done.
 - No vague items like "fix things" or "improve code".
 
-After writing the file, show the full contents to the user and ask:
-
-```
-I've created TODO.md. Does this plan look correct?
-Reply YES to start, or tell me what to change.
-```
+After writing the file, give the user a summary describing the plan, thinking, and intent behind it. Then ask for confirmation to start, or for any plan amends.
 
 ---
 
@@ -131,7 +126,7 @@ If the user requests changes:
 
 1. Ask targeted follow-up questions to resolve the disagreement.
 2. Rewrite `TODO.md`.
-3. Show the updated plan and ask for approval again.
+3. Summarise the updated plan again and ask for approval again.
 
 Repeat until the user approves.
 

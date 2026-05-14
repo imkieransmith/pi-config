@@ -1,25 +1,34 @@
 ---
 name: evidence-add
 title: Add Evidence
-description: Use this skill any time you are about to state a non-trivial fact in a response — especially after web search, web page fetch, or any other retrieval. Triggers include results from web-search/visit-webpage, claims about real people/companies/events/products, dates, numbers, statistics, prices, versions, quotes, attributions, current state ("who is the CEO of…", "what does X cost"), and anything you just looked up in docs or files. Every such claim must be backed by a stored evidence entry before it appears in your final answer. Do NOT use for stable training-data knowledge with no recency dependence (e.g., "Python is a programming language"), the user's own statements, or hypotheticals.
+description: Store evidence for retrieved or recalled factual claims about external reality before stating them. Triggers: snippets from web-search/visit-webpage, statements about real entities you did not observe in this session (people's roles, company facts, dates, prices, versions, statistics, current status), quotes or paraphrases of others' words, and recalled facts from documentation. Do NOT use for: descriptions of work you just performed (code changes, file edits, command output, anything visible in a diff or artifact), your own reasoning, recommendations, or design opinions; stable definitional knowledge ("Python is a language"); the user's own statements; or hypotheticals. The test: could the user verify this by reading something you just produced or did? If yes, no evidence needed. If they'd have to trust your word about the outside world, store evidence.
 ---
 
 ## When this fires
 
-If any of these appear in your draft, you MUST have evidence stored first:
-- Anything from a `web-search` snippet or `visit-webpage` page.
+Evidence is required when the claim originates from outside the current session — retrieved from web search, a fetched page, a local file you read, or recalled from training. Specifically:
+
+- Any snippet returned by `web-search` or `visit-webpage`.
 - A name, date, number, version, price, or current status of a real entity.
 - A claim starting with "according to", "as of", "currently", "recently".
 - A quote or paraphrase of someone else's words.
-- Anything you'd add a citation to in writing.
+- A recalled fact about a real library/API/standard that the user might rely on (e.g., "Vue 3.4 added X").
 
-If unsure whether something counts, store it. Cheap to add, expensive to skip.
+## When this does NOT fire
+
+- **Descriptions of your own actions.** "I increased the shader brightness", "I extracted this into a helper", "the new flag defaults to true", "the function now returns a Promise". The user can read the diff or the file.
+- **Reasoning, opinions, recommendations.** "I'd reach for a queue here" is your judgment, not a retrieved fact.
+- **Stable definitional knowledge.** "Laravel is a PHP framework", "HTTPS encrypts traffic", "B-trees are balanced".
+- **The user's own statements** repeated or built on.
+- **Hypotheticals or examples** you invented to illustrate a point.
+
+If a sentence describes something the user can verify by looking at the materials already in front of them, do not store evidence for it.
 
 ## Workflow
 
-1. Retrieve fact (search / fetch / read file / run command).
+1. Retrieve fact (search / fetch / read file).
 2. **Immediately** call EvidenceAdd, before your next tool call, before composing prose.
-3. Before sending your final answer, call EvidenceList. For every claim in your draft, confirm a covering entry exists. If a claim has no entry, either retrieve and store it now, or remove the claim.
+3. Before sending your final answer, call EvidenceList. For every claim in your draft that fires the trigger above, confirm a covering entry exists. If missing, retrieve and store, or remove the claim.
 4. Cite inline with the returned ID: *"introduced in 1936 (e3a1f2)"*.
 
 ## Rules
@@ -31,16 +40,16 @@ If unsure whether something counts, store it. Cheap to add, expensive to skip.
 
 ## Source format
 
-| Origin | Format |
-|---|---|
-| Web page | full URL |
-| Local file | `file:<path>` |
-| Bash output | `bash:<description>` |
-| Tool result | `tool:<ToolName>:<query>` |
+| Origin       | Format                       |
+| ------------ | ---------------------------- |
+| Web page     | full URL                     |
+| Local file   | `file:<path>`                |
+| Bash output  | `bash:<description>`         |
+| Tool result  | `tool:<ToolName>:<query>`    |
 
 ## Examples
 
-**Good** — smallest verbatim span, one claim:
+**Good** — retrieved fact, smallest verbatim span:
 ```json
 {
   "source": "https://example.com/article",
@@ -49,7 +58,15 @@ If unsure whether something counts, store it. Cheap to add, expensive to skip.
 }
 ```
 
-**Bad** — snippet is a paraphrase and far too long:
+**Skip** — self-report of work done. The diff is the evidence:
+> Claim: *"Speed-line shader visual defaults were increased for brighter, more visible lines."*
+> Action: None. The user can read the change.
+
+**Skip** — design recommendation, not a retrieved fact:
+> Claim: *"Using a fixed timestep here will make the physics deterministic across machines."*
+> Action: None. This is reasoning, not a citation-bearing claim.
+
+**Bad** — paraphrased and far too long:
 ```json
 {
   "note": "Turing stuff",
