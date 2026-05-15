@@ -1,7 +1,19 @@
 ---
 name: evidence-add
 title: Add Evidence
-description: Store evidence for retrieved or recalled factual claims about external reality before stating them. Triggers: snippets from web-search/visit-webpage, statements about real entities you did not observe in this session (people's roles, company facts, dates, prices, versions, statistics, current status), quotes or paraphrases of others' words, and recalled facts from documentation. Do NOT use for: descriptions of work you just performed (code changes, file edits, command output, anything visible in a diff or artifact), your own reasoning, recommendations, or design opinions; stable definitional knowledge ("Python is a language"); the user's own statements; or hypotheticals. The test: could the user verify this by reading something you just produced or did? If yes, no evidence needed. If they'd have to trust your word about the outside world, store evidence.
+description: >
+  Store evidence for retrieved or recalled factual claims about external reality
+  before stating them. Triggers — snippets from web-search/visit-webpage,
+  statements about real entities you did not observe in this session (people's
+  roles, company facts, dates, prices, versions, statistics, current status),
+  quotes or paraphrases of others' words, and recalled facts from documentation.
+  Do NOT use for descriptions of work you just performed (code changes, file
+  edits, command output, anything visible in a diff or artifact), your own
+  reasoning, recommendations, or design opinions; stable definitional knowledge
+  ("Python is a language"); the user's own statements; or hypotheticals. The
+  test — could the user verify this by reading something you just produced or
+  did? If yes, no evidence needed. If they'd have to trust your word about the
+  outside world, store evidence.
 ---
 
 ## When this fires
