@@ -10,33 +10,33 @@ Fetch and extract readable content from web pages as markdown, or download image
 
 ## Setup
 
-Optionally get a Jina API key for higher rate limits:
-1. Create an account at https://jina.ai/
-2. Get your API key from the dashboard
-3. Add to your shell profile (`~/.profile` or `~/.zprofile` for zsh):
-   ```bash
-   export JINA_API_KEY="your-api-key-here"
-   ```
+Optionally set `JINA_API_KEY` in your shell environment for higher Jina Reader rate limits.
 
 Without an API key, the service works with rate limits.
 
 ## Usage
 
 ```bash
-{baseDir}/visit.py <url>
+python3 {baseDir}/visit.py <url>
+```
+
+When this skill is loaded, resolve `{baseDir}` to this skill directory:
+
+```text
+/Users/kieran/.pi/agent/skills/visit-webpage
 ```
 
 ## Examples
 
 ```bash
 # Read an article (returns markdown)
-{baseDir}/visit.py https://example.com/article
+python3 {baseDir}/visit.py https://example.com/article
 
 # Fetch documentation
-{baseDir}/visit.py https://docs.python.org/3/library/asyncio.html
+python3 {baseDir}/visit.py https://docs.python.org/3/library/asyncio.html
 
 # Download an image (auto-detected by content-type)
-{baseDir}/visit.py https://example.com/image.png
+python3 {baseDir}/visit.py https://example.com/image.png
 # Then use read tool to view: read /tmp/visit-image-xxx.png
 ```
 
@@ -54,6 +54,11 @@ For **images**: Downloads the image to a temp file and prints the path. Use the 
 - Auto-detects and downloads images to temp files
 - Retries on rate limiting (HTTP 451)
 - 5MB max image size limit
+
+## Tips
+
+- Do not pipe through `tee`/`sed` by default; Pi already truncates long command output and stores full output when needed.
+- If you need to keep a copy of page markdown, redirect stdout to a `/tmp/*.md` file after confirming the command works.
 
 ## When to Use
 

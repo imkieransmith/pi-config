@@ -209,6 +209,22 @@ function shellPiReferencesArePlanningNotes(command: string): boolean {
   return piRefs.length > 0 && piRefs.every((word) => isTodoPlanningNote(word) || path.basename(word) === "PLAN.md");
 }
 
+function isShellSkillReference(word: string): boolean {
+  const normalized = expandUserPath(word).replace(/\\/g, "/");
+  const skillsDir = path.join(os.homedir(), ".pi", "agent", "skills").replace(/\\/g, "/");
+  return normalized === skillsDir || normalized.startsWith(`${skillsDir}/`) || /(?:^|\/)\.pi\/agent\/skills(?:\/|$)/.test(normalized);
+}
+
+function shellPiReferencesAreSkillFiles(command: string): boolean {
+  const piRefs = shellFileReferences(command).filter((word) => pathSegments(word).includes(".pi"));
+  return piRefs.length > 0 && piRefs.every(isShellSkillReference);
+}
+
+function shellWritesToPiReference(command: string): boolean {
+  const piPath = String.raw`(?:"[^"]*\.pi\/[^">|&;]*"|'[^']*\.pi\/[^'>|&;]*'|[^\s"'\`<>|&;]*\.pi\/[^\s"'\`<>|&;]*)`;
+  return new RegExp(String.raw`(?:>>?\s*${piPath}|\b(?:tee|sponge|cp|mv|install)\b[^\n;|&]*${piPath})`, "i").test(command);
+}
+
 function shellRewriteTargetsOnlyTodo(command: string): boolean {
   const refs = shellFileReferences(command);
   return refs.some(isTodoPlanningNote) && refs.every(isTodoPlanningNote);
@@ -335,7 +351,10 @@ function classifyBash(command: string): Decision {
 
   for (const rule of shellSecretPathRules) {
     if (rule.pattern.test(command) && (sensitiveReadCommands.test(command) || shellWriteOperators.test(command))) {
-      if (rule.reason === "Pi configuration" && shellPiReferencesArePlanningNotes(command)) continue;
+      if (rule.reason === "Pi configuration") {
+        if (shellPiReferencesArePlanningNotes(command)) continue;
+        if (shellPiReferencesAreSkillFiles(command) && !shellWritesToPiReference(command)) continue;
+      }
       return block(`bash touches protected path: ${rule.reason}`, command);
     }
   }
