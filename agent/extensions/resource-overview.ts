@@ -83,6 +83,10 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
     title: "Security Guard",
     description: "Confirms or blocks risky commands and sensitive file access.",
   },
+  "senior-dev": {
+    title: "Senior Dev",
+    description: "Routine SOTA steering for weaker workhorse models.",
+  },
   "session-query.ts": {
     title: "Session Query",
     description: "Query previous sessions, including custom state and summaries.",
