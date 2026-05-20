@@ -85,7 +85,7 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
   },
   "senior-dev": {
     title: "Senior Dev",
-    description: "Routine SOTA steering for weaker workhorse models.",
+    description: "Routine senior-model steering for selected coding models.",
   },
   "session-query.ts": {
     title: "Session Query",

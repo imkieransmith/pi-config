@@ -71,7 +71,6 @@ const shellSecretPathRules: Rule[] = [
   { pattern: /(?:^|[\/\s"'`=:@])\.dev\.vars[^\s"'`]*/i, reason: "dev vars file" },
   { pattern: /(?:^|[\/\s"'`=:@])\.ssh(?:\/|$|\s)/i, reason: "SSH directory" },
   { pattern: /(?:^|[\/\s"'`=:@])\.gnupg(?:\/|$|\s)/i, reason: "GnuPG directory" },
-  { pattern: /(?:^|[\/\s"'`=:@])\.pi(?:\/|$|\s)/i, reason: "Pi configuration" },
   { pattern: /(?:^|[\/\s"'`=:@])\.git(?:\/|$|\s)/i, reason: "git internals" },
   { pattern: /\b(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)\b/i, reason: "SSH private key" },
   { pattern: /[^\s"'`]+\.(?:pem|key)(?:$|[\s"'`<>|&;])/i, reason: "private key file" },
@@ -165,17 +164,73 @@ function includesSensitiveProjectExtension(absPath: string, cwd: string): boolea
   return isInside(path.join(cwd, ".pi", "extensions"), absPath);
 }
 
-/** Skills and extensions are core Pi authoring surfaces, not private config. */
-function isPiKnowledgePath(absPath: string, home: string): boolean {
+type PiPathTier = "public" | "authoring" | "private" | "config" | "outside";
+
+/** Root-level planning notes are intentionally writable across projects. */
+function isPiPlanningNote(absPath: string, home: string): boolean {
+  return absPath === path.join(home, ".pi", "PLAN.md") || absPath === path.join(home, ".pi", "TODO.md");
+}
+
+/** Root-level docs describe this personal Pi repo and are safe to maintain. */
+function isPiRootPublicFile(absPath: string, home: string): boolean {
+  const piRoot = path.join(home, ".pi");
+  return path.dirname(absPath) === piRoot && /^(?:README(?:\.[\w-]+)?|TODO|PLAN)\.md$/i.test(path.basename(absPath));
+}
+
+/** A small amount of directory discovery is needed to work on the personal Pi repo. */
+function isPiPublicDirectory(absPath: string, home: string): boolean {
+  const dirs = [
+    path.join(home, ".pi"),
+    path.join(home, ".pi", "agent"),
+    path.join(home, ".pi", "agent", "skills"),
+    path.join(home, ".pi", "agent", "extensions"),
+  ];
+  return dirs.some((dir) => absPath === dir);
+}
+
+function isBroadPiDiscoveryPath(absPath: string, home: string): boolean {
+  return absPath === path.join(home, ".pi") || absPath === path.join(home, ".pi", "agent");
+}
+
+/** Skills and extensions are authoring surfaces. Mutations are allowed only after confirmation. */
+function isPiAuthoringPath(absPath: string, home: string): boolean {
   return (
     isInside(path.join(home, ".pi", "agent", "skills"), absPath) ||
     isInside(path.join(home, ".pi", "agent", "extensions"), absPath)
   );
 }
 
-/** Root-level planning notes are intentionally writable across projects. */
-function isPiPlanningNote(absPath: string, home: string): boolean {
-  return absPath === path.join(home, ".pi", "PLAN.md") || absPath === path.join(home, ".pi", "TODO.md");
+/** Runtime/private Pi state can contain transcripts, payloads, logs, cache, or saved snippets. */
+function isPiPrivateRuntimePath(absPath: string, home: string): boolean {
+  return [
+    path.join(home, ".pi", "agent", "sessions"),
+    path.join(home, ".pi", "agent", "history"),
+    path.join(home, ".pi", "agent", "cache"),
+    path.join(home, ".pi", "agent", "logs"),
+    path.join(home, ".pi", "agent", "state"),
+    path.join(home, ".pi", "agent", "tmp"),
+    path.join(home, ".pi", "agent", "evidence"),
+    path.join(home, ".pi", "agent", "senior-dev"),
+  ].some((dir) => isInside(dir, absPath));
+}
+
+/** Config-looking files outside authoring dirs may include provider/model/auth settings. */
+function isPiPrivateConfigPath(absPath: string, home: string): boolean {
+  if (!isInside(path.join(home, ".pi"), absPath)) return false;
+  if (isPiAuthoringPath(absPath, home) || isPiRootPublicFile(absPath, home)) return false;
+
+  const base = path.basename(absPath).toLowerCase();
+  return /^(?:config|settings|models?|providers?|auth|credentials?)(?:\.|$)/i.test(base);
+}
+
+function classifyPiPath(absPath: string, home: string): PiPathTier {
+  const piRoot = path.join(home, ".pi");
+  if (!isInside(piRoot, absPath)) return "outside";
+  if (isPiPrivateRuntimePath(absPath, home)) return "private";
+  if (isPiPrivateConfigPath(absPath, home)) return "config";
+  if (isPiAuthoringPath(absPath, home)) return "authoring";
+  if (isPiRootPublicFile(absPath, home) || isPiPublicDirectory(absPath, home)) return "public";
+  return "private";
 }
 
 /** TODO.md files are AI scratchpads and should never be gated. */
@@ -204,25 +259,51 @@ function shellFileReferences(command: string): string[] {
     .filter((word) => /(?:^|\/)[^\/]*\.[A-Za-z0-9][A-Za-z0-9_-]*$/.test(word));
 }
 
-function shellPiReferencesArePlanningNotes(command: string): boolean {
-  const piRefs = shellFileReferences(command).filter((word) => pathSegments(word).includes(".pi"));
-  return piRefs.length > 0 && piRefs.every((word) => isTodoPlanningNote(word) || path.basename(word) === "PLAN.md");
+function shellPiReferences(command: string): string[] {
+  const words = command.match(shellWordPattern) ?? [];
+  return words
+    .map(cleanShellWord)
+    .filter((word) => /(?:^|[\/])\.pi(?:[\/]|$)|^~\/\.pi(?:[\/]|$)/.test(word.replace(/\\/g, "/")));
 }
 
-function isShellSkillReference(word: string): boolean {
-  const normalized = expandUserPath(word).replace(/\\/g, "/");
-  const skillsDir = path.join(os.homedir(), ".pi", "agent", "skills").replace(/\\/g, "/");
-  return normalized === skillsDir || normalized.startsWith(`${skillsDir}/`) || /(?:^|\/)\.pi\/agent\/skills(?:\/|$)/.test(normalized);
-}
+function shellRefToApproxPath(word: string): string {
+  const cleaned = expandUserPath(word).replace(/\\/g, path.sep);
+  if (path.isAbsolute(cleaned)) return path.resolve(cleaned);
 
-function shellPiReferencesAreSkillFiles(command: string): boolean {
-  const piRefs = shellFileReferences(command).filter((word) => pathSegments(word).includes(".pi"));
-  return piRefs.length > 0 && piRefs.every(isShellSkillReference);
+  const normalized = cleaned.replace(/\\/g, "/");
+  const piIndex = normalized.split("/").indexOf(".pi");
+  if (piIndex >= 0) {
+    const parts = normalized.split("/").slice(piIndex + 1);
+    return path.join(os.homedir(), ".pi", ...parts);
+  }
+
+  return path.resolve(cleaned);
 }
 
 function shellWritesToPiReference(command: string): boolean {
-  const piPath = String.raw`(?:"[^"]*\.pi\/[^">|&;]*"|'[^']*\.pi\/[^'>|&;]*'|[^\s"'\`<>|&;]*\.pi\/[^\s"'\`<>|&;]*)`;
+  const piPath = String.raw`(?:"[^"]*\.pi(?:\/[^">|&;]*)?"|'[^']*\.pi(?:\/[^'>|&;]*)?'|[^\s"'\`<>|&;]*\.pi(?:\/[^\s"'\`<>|&;]*)?)`;
   return new RegExp(String.raw`(?:>>?\s*${piPath}|\b(?:tee|sponge|cp|mv|install)\b[^\n;|&]*${piPath})`, "i").test(command);
+}
+
+function classifyBashPiReferences(command: string): Decision {
+  const refs = shellPiReferences(command);
+  if (refs.length === 0) return ALLOW;
+
+  const home = os.homedir();
+  const writesToPi = shellWritesToPiReference(command);
+  for (const ref of refs) {
+    const approxPath = shellRefToApproxPath(ref);
+    const sensitive = includesSensitiveSegment(approxPath);
+    if (sensitive) return block(`bash touches protected path: ${sensitive}`, command);
+
+    const tier = classifyPiPath(approxPath, home);
+    if (tier === "outside") continue;
+    if (tier === "private") return block("bash touches protected path: Pi private runtime state", command);
+    if (tier === "config") return block("bash touches protected path: Pi provider/model configuration", command);
+    if (tier === "authoring" && writesToPi) return confirm("modify Pi authoring surface", command);
+  }
+
+  return ALLOW;
 }
 
 function shellRewriteTargetsOnlyTodo(command: string): boolean {
@@ -257,7 +338,7 @@ function sensitiveFilePattern(value: string): string | undefined {
   if (/(^|\/)\.env(?!\.example(?:$|\/))[^/]*/i.test(normalized)) return "environment file";
   if (/(^|\/)\.dev\.vars[^/]*/i.test(normalized)) return "dev vars file";
   if (/(^|\/)\.(?:ssh|gnupg|git)(?:$|\/)/i.test(normalized)) return "sensitive directory";
-  if (/(^|\/)\.pi\/extensions(?:$|\/)/i.test(normalized)) return "Pi extension";
+  if (/(^|\/)\.pi\/agent\/(?:sessions|history|cache|logs|state|tmp|evidence|senior-dev)(?:$|\/)/i.test(normalized)) return "Pi private runtime state";
   if (/\.(?:pem|key)(?:$|[^\w])/i.test(normalized)) return "private key file";
   if (/\b(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)\b/i.test(normalized)) return "SSH private key";
   if (/(?:secret|credentials?|tokens?|api[_-]?keys?)/i.test(normalized)) return "secret material";
@@ -274,7 +355,6 @@ async function classifyPath(
 ): Promise<Decision> {
   const cwd = await resolveToolPath(".", ctx);
   const home = os.homedir();
-  const protectedPi = path.join(home, ".pi");
 
   if (isTodoPlanningNote(absPath)) {
     return ALLOW;
@@ -296,9 +376,22 @@ async function classifyPath(
     return ALLOW;
   }
 
-  if (isInside(protectedPi, absPath)) {
-    if (isPiKnowledgePath(absPath, home)) return ALLOW;
-    return block(`${intent} of Pi configuration`, rawPath);
+  const piTier = classifyPiPath(absPath, home);
+  if (piTier === "public") return ALLOW;
+  if (piTier === "authoring") {
+    if (intent !== "mutate") return ALLOW;
+    return {
+      action: "confirm",
+      reason: "modifying Pi authoring surface",
+      title: "Security check: modify Pi authoring surface?",
+      detail: rawPath,
+    };
+  }
+  if (piTier === "private") {
+    return block(`${intent} of Pi private runtime state`, rawPath);
+  }
+  if (piTier === "config") {
+    return block(`${intent} of Pi provider/model configuration`, rawPath);
   }
   if (includesSensitiveProjectExtension(absPath, cwd)) {
     if (intent !== "mutate") return ALLOW;
@@ -349,12 +442,11 @@ function classifyBash(command: string): Decision {
     if (rule.pattern.test(command)) return block(rule.reason, command);
   }
 
+  const piDecision = classifyBashPiReferences(command);
+  if (piDecision.action !== "allow") return piDecision;
+
   for (const rule of shellSecretPathRules) {
     if (rule.pattern.test(command) && (sensitiveReadCommands.test(command) || shellWriteOperators.test(command))) {
-      if (rule.reason === "Pi configuration") {
-        if (shellPiReferencesArePlanningNotes(command)) continue;
-        if (shellPiReferencesAreSkillFiles(command) && !shellWritesToPiReference(command)) continue;
-      }
       return block(`bash touches protected path: ${rule.reason}`, command);
     }
   }
@@ -413,7 +505,9 @@ function formatSecurityStatus(): string {
     "protects:",
     "- blocks high-risk bash patterns such as privilege escalation, destructive disk commands, remote script execution, and secret exfiltration patterns",
     "- confirms package manager, container, network fetch, recursive delete, and project script commands when an interactive UI is available",
-    "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, private keys, and most Pi configuration",
+    "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, private keys, and secret-like filenames",
+    "- allows normal Pi repo docs and authoring reads, while blocking private Pi runtime state such as sessions, logs, caches, state, and debug payloads",
+    "- asks for confirmation before modifying Pi authoring surfaces such as personal extensions and skills",
     "- blocks file mutation outside the current project and inside node_modules",
     "- asks for confirmation before modifying executable project configuration such as package.json, lockfiles, shell scripts, CI config, and task files",
   ].join("\n");
@@ -478,6 +572,10 @@ export default function (pi: ExtensionAPI) {
       const absPath = await resolveToolPath(rawPath ?? ".", ctx);
       const pathDecision = await classifyPath(absPath, rawPath ?? ".", ctx, "discover");
       if (pathDecision.action !== "allow") return handleDecision(pathDecision, ctx);
+
+      if ((event.toolName === "grep" || event.toolName === "find") && isBroadPiDiscoveryPath(absPath, os.homedir())) {
+        return handleDecision(block(`broad ${event.toolName} of Pi repo; target ~/.pi/agent/extensions, ~/.pi/agent/skills, or a specific public file instead`, rawPath ?? "."), ctx);
+      }
 
       const searchTarget = event.toolName === "grep"
         ? toolString(event.input, "glob")

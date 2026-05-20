@@ -7,8 +7,29 @@ Most packages/extensions are copied into this repo and built on directly rather 
 
 The code here is intended as a working personal config rather than a polished package, but it may still be useful to you as a reference if you’re building or adapting your own Pi extensions.
 
-## Install
+## What this repo contains
+This repo is a personal Pi setup: agent-facing extensions, skills, and UI helpers that are loaded into Pi sessions.
 
+### Extensions
+- **Advisor** (`advisor`) — Let the model ask a stronger model for a second opinion before it acts.
+- **Ask User Question** (`ask-user-question`) — Interactive multiple-choice clarification tool for agents.
+- **Context Snapshot** (`context.ts`) — Durable investigation checkpoints and restore summaries.
+- **Custom Footer** (`custom-footer`) — Compact powerline-style footer with path, context, and model info.
+- **Evidence Store** (`evidence.ts`) — Durable citable evidence snippets with list/get/add tools.
+- **Meep** (`meep.ts`) — Says meep when the model is done working.
+- **Plan Command** (`plan.ts`) — Deterministic `/plan` handoff that manages ContextSnapshot checkpoints.
+- **Redact Sensitive Data** (`redact.ts`) — Redact secrets from tool output.
+- **Resource Overview** (`resource-overview.ts`) — Richer startup overview for loaded skills and extensions.
+- **RTK Rewrite** (`rtk.ts`) — Best-effort shell command optimization via `rtk rewrite`.
+- **Security Guard** (`security.ts`) — Confirms or blocks risky commands and sensitive file access.
+- **Senior Dev** (`senior-dev`) — Routine senior-model steering for selected coding models.
+- **Session Query** (`session-query.ts`) — Query previous sessions, including custom state and summaries.
+- **Tool Pills** (`tool-pills`) — Compact colored tool call/result rendering and syntax-highlighted diffs.
+
+### Skills
+Skills live under `agent/skills/` and provide task-specific instructions that agents load on demand, such as evidence capture, web search/page reading, and structured planning.
+
+## Install
 ```bash
 pi install git:github.com/imkieransmith/pi-config
 ```
@@ -16,5 +37,4 @@ pi install git:github.com/imkieransmith/pi-config
 You can install it directly like this, but I'd recommend copying the parts you want into your own config and building on top of them instead. That’s how this repo evolved in the first place, and it makes it much easier to fully understand, customise, and maintain your own setup long term.
 
 ## License
-
 MIT. Attribution for code that originally came from other Pi users is linked in the relevant source files where applicable.
