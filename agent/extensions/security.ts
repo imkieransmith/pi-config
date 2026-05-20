@@ -174,7 +174,7 @@ function isPiPlanningNote(absPath: string, home: string): boolean {
 /** Root-level docs describe this personal Pi repo and are safe to maintain. */
 function isPiRootPublicFile(absPath: string, home: string): boolean {
   const piRoot = path.join(home, ".pi");
-  return path.dirname(absPath) === piRoot && /^(?:README(?:\.[\w-]+)?|TODO|PLAN)\.md$/i.test(path.basename(absPath));
+  return path.dirname(absPath) === piRoot && (/^(?:README(?:\.[\w-]+)?|TODO|PLAN)\.md$/i.test(path.basename(absPath)) || path.basename(absPath) === ".gitignore");
 }
 
 /** A small amount of directory discovery is needed to work on the personal Pi repo. */
