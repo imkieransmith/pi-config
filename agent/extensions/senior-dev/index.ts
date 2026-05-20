@@ -28,7 +28,8 @@ const COMMAND_NAME = "senior-dev";
 
 const CONFIG = {
 	// Personal inline config. Edit this file directly if you want to change behaviour.
-	seniorModel: "openai/gpt-5.5",
+	// Use the Codex provider so ChatGPT/Codex subscription OAuth is reused instead of requiring OPENAI_API_KEY.
+	seniorModel: "openai-codex/gpt-5.5",
 	seniorThinkingLevel: "high" as ThinkingLevel | undefined,
 	disableForStrongModels: true,
 	weakModelMatchers: [
@@ -38,7 +39,9 @@ const CONFIG = {
 		"*/plan*",
 	],
 	strongModelMatchers: [
+		"openai-codex/gpt-5.5*",
 		"openai/gpt-5.5*",
+		"*/gpt-5.5*",
 		"anthropic/claude-opus-*",
 		"anthropic/claude-4.7-opus*",
 		"anthropic/claude-opus-4-7*",
@@ -170,7 +173,7 @@ function applyActiveToolPolicy(pi: ExtensionAPI, ctx?: ExtensionContext): ModelC
 		ensureActive(pi);
 		return classification;
 	}
-	if (classification === "strong" && CONFIG.disableForStrongModels) {
+	if (CONFIG.disableForStrongModels) {
 		ensureInactive(pi);
 		return classification;
 	}
@@ -459,6 +462,18 @@ async function executeSeniorDev(
 	};
 
 	try {
+		const override = state().manualOverride;
+		if (classification !== "weak" && override !== "enabled") {
+			ensureInactive(pi);
+			const message = `senior_dev is disabled in automatic mode for ${classification} model ${activeModel}. It auto-activates only for configured weak models; use /senior-dev enable to override.`;
+			s.lastError = message;
+			finishDebug({ success: false, skipped: true, error: message });
+			return {
+				content: [{ type: "text", text: message }],
+				details: { seniorModel: seniorLabel, activeModel, stage: params.stage, classification, errorMessage: message, debugLog: debugLogPath(), callNumber } satisfies SeniorDetails,
+			};
+		}
+
 		if (!senior) {
 			const error = `Configured senior model not found: ${CONFIG.seniorModel}`;
 			s.lastError = error;
@@ -471,7 +486,7 @@ async function executeSeniorDev(
 
 		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(senior);
 		if (!auth.ok || !auth.apiKey) {
-			const error = !auth.ok ? auth.error : `No API key available for ${senior.provider}`;
+			const error = !auth.ok ? auth.error : `No request auth available for ${senior.provider}. If using ChatGPT/Codex subscription auth, run /login ${senior.provider}; if using API auth, add that provider's API key.`;
 			s.lastError = error;
 			finishDebug({ success: false, error });
 			return {
@@ -643,6 +658,7 @@ function statusText(pi: ExtensionAPI, ctx: ExtensionContext): string {
 		`active model: ${modelKey(ctx.model) ?? "(none)"}`,
 		`classification: ${classification}`,
 		`tool active: ${isSeniorActive(pi)}`,
+		`auto policy: active only for configured weak models; strong/neutral models are hidden unless manually enabled`,
 		`manual override: ${s.manualOverride ?? "none"}`,
 		`attempted calls this session: ${s.attemptedCalls}`,
 		`successful calls this session: ${s.successfulCalls}`,
