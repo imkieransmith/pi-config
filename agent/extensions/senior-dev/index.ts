@@ -12,19 +12,20 @@
  * Agent tool equivalent: senior_dev asks a configured senior model for one recommended next move.
  */
 
-import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Api, ImageContent, Message, Model, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
+import type { Api, Message, Model, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import { completeSimple, StringEnum } from "@earendil-works/pi-ai";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const TOOL_NAME = "senior_dev";
 const COMMAND_NAME = "senior-dev";
+const ADVISOR_TOOL_NAME = "advisor";
+const CONTEXT_SNAPSHOT_STATE_TYPE = "context-snapshot-state";
 
 const CONFIG = {
 	// Personal inline config. Edit this file directly if you want to change behaviour.
@@ -54,6 +55,18 @@ const CONFIG = {
 		payloadSampleEvery: 5,
 		payloadSampleOnError: true,
 	},
+	payload: {
+		maxTotalChars: 80_000,
+		maxTodoChars: 20_000,
+		maxSnapshotChars: 12_000,
+		maxSnapshotSummaries: 3,
+		maxAdvisorChars: 18_000,
+		maxAdvisorResults: 3,
+		maxAdvisorResultChars: 6_000,
+		maxConversationChars: 20_000,
+		maxConversationMessages: 10,
+		maxConversationMessageChars: 4_000,
+	},
 };
 
 type ModelClass = "weak" | "strong" | "neutral";
@@ -63,9 +76,7 @@ type SeniorStage = "planning" | "architecture" | "implementation" | "debugging" 
 interface SeniorParams {
 	question: string;
 	stage?: SeniorStage;
-	current_plan?: string;
 	uncertainty?: string;
-	files_or_symbols?: string[];
 }
 
 interface SeniorDetails {
@@ -193,14 +204,6 @@ function ensureDebugDir(): void {
 	}
 }
 
-function safeJson(value: unknown): string {
-	try {
-		return JSON.stringify(value, null, 2);
-	} catch {
-		return String(value);
-	}
-}
-
 function compactJson(value: unknown): string {
 	try {
 		return JSON.stringify(value);
@@ -213,104 +216,150 @@ function approxTokens(chars: number): number {
 	return Math.ceil(chars / 4);
 }
 
-function textOfContent(content: unknown): string {
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function truncateText(text: string, maxChars: number): string {
+	if (maxChars <= 0) return "";
+	if (text.length <= maxChars) return text;
+	return `${text.slice(0, maxChars)}\n[... truncated at ${maxChars.toLocaleString()} chars ...]`;
+}
+
+function enforceTotalPayloadBudget(text: string): string {
+	return truncateText(text, CONFIG.payload.maxTotalChars);
+}
+
+function visibleTextOfContent(content: unknown): string {
 	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return safeJson(content);
+	if (!Array.isArray(content)) return "";
 	return content
 		.map((part) => {
-			if (!part || typeof part !== "object") return String(part);
-			const p = part as Record<string, unknown>;
-			if (p.type === "text") return String(p.text ?? "");
-			if (p.type === "thinking") return `<thinking>\n${String(p.thinking ?? "")}\n</thinking>`;
-			if (p.type === "image") {
-				const mime = typeof p.mimeType === "string" ? p.mimeType : "image";
-				const chars = typeof p.data === "string" ? p.data.length : 0;
-				return `[image omitted from text diagnostic: ${mime}, ${chars.toLocaleString()} base64 chars]`;
-			}
-			if (p.type === "toolCall") return `Tool call: ${String(p.name ?? "unknown")}\nArguments: ${safeJson(p.arguments ?? {})}`;
-			return safeJson(p);
+			if (!isRecord(part)) return "";
+			if (part.type === "text" && typeof part.text === "string") return part.text;
+			return "";
 		})
-		.join("\n");
+		.filter((text) => text.trim().length > 0)
+		.join("\n")
+		.trim();
 }
 
-function stripInflightSeniorDevCall(messages: AgentMessage[]): AgentMessage[] {
-	if (messages.length === 0) return messages;
-	const last = messages[messages.length - 1];
-	if (last.role !== "assistant") return messages;
-	const filtered = last.content.filter((part) => !(part.type === "toolCall" && part.name === TOOL_NAME));
-	if (filtered.length === last.content.length) return messages;
-	if (filtered.length === 0) return messages.slice(0, -1);
-	return [...messages.slice(0, -1), { ...last, content: filtered }];
+function formatTimestamp(value: unknown): string | undefined {
+	let ms: number | undefined;
+	if (typeof value === "number") ms = value;
+	if (typeof value === "string") {
+		const parsed = Date.parse(value);
+		if (Number.isFinite(parsed)) ms = parsed;
+	}
+	if (ms === undefined || !Number.isFinite(ms)) return undefined;
+	return new Date(ms).toISOString();
 }
 
-function serializeAgentMessage(message: AgentMessage, index: number): string {
-	if (message.role === "user") {
-		return `## ${index + 1}. USER\n${textOfContent(message.content)}`;
+function readTodoMd(ctx: ExtensionContext): string {
+	try {
+		const content = readFileSync(join(ctx.cwd, "TODO.md"), "utf-8").trim();
+		return truncateText(content || "(TODO.md is empty)", CONFIG.payload.maxTodoChars);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		return `(TODO.md unavailable: ${message})`;
 	}
-	if (message.role === "assistant") {
-		const meta = [`model=${message.provider}/${message.model}`, `stop=${message.stopReason}`].join(" ");
-		return `## ${index + 1}. ASSISTANT (${meta})\n${textOfContent(message.content)}`;
-	}
-	if (message.role === "toolResult") {
-		const body = [
-			`Tool: ${message.toolName}`,
-			`Status: ${message.isError ? "error" : "ok"}`,
-			`Content:\n${textOfContent(message.content)}`,
-			message.details === undefined ? undefined : `Details:\n${safeJson(message.details)}`,
-		]
-			.filter((x): x is string => x !== undefined)
-			.join("\n\n");
-		return `## ${index + 1}. TOOL RESULT\n${body}`;
-	}
-	if (message.role === "bashExecution") {
-		return `## ${index + 1}. USER BASH\nCommand: ${message.command}\nExit: ${message.exitCode ?? "unknown"}\nCancelled: ${message.cancelled}\nTruncated by bash tool: ${message.truncated}\nOutput:\n${message.output}`;
-	}
-	if (message.role === "custom") {
-		return `## ${index + 1}. CUSTOM (${message.customType})\n${textOfContent(message.content)}${message.details === undefined ? "" : `\n\nDetails:\n${safeJson(message.details)}`}`;
-	}
-	if (message.role === "branchSummary") {
-		return `## ${index + 1}. BRANCH SUMMARY\n${message.summary}`;
-	}
-	if (message.role === "compactionSummary") {
-		return `## ${index + 1}. COMPACTION SUMMARY (${message.tokensBefore.toLocaleString()} tokens before compaction)\n${message.summary}`;
-	}
-	return `## ${index + 1}. MESSAGE\n${safeJson(message)}`;
 }
 
-function sessionMessages(ctx: ExtensionContext): AgentMessage[] {
-	const branch = ctx.sessionManager.getBranch();
-	return branch
-		.map((entry: SessionEntry): AgentMessage | undefined => {
-			if (entry.type === "message") return entry.message;
-			if (entry.type === "compaction") {
-				return {
-					role: "compactionSummary",
-					summary: entry.summary,
-					tokensBefore: entry.tokensBefore,
-					timestamp: new Date(entry.timestamp).getTime(),
-				};
-			}
-			if (entry.type === "branch_summary") {
-				return {
-					role: "branchSummary",
-					summary: entry.summary,
-					fromId: entry.fromId,
-					timestamp: new Date(entry.timestamp).getTime(),
-				};
-			}
-			return undefined;
+function latestContextSnapshotSummaries(ctx: ExtensionContext): string {
+	const summaries = ctx.sessionManager
+		.getBranch()
+		.map((entry) => {
+			if (entry.type !== "custom" || entry.customType !== CONTEXT_SNAPSHOT_STATE_TYPE || !isRecord(entry.data)) return undefined;
+			if (entry.data.type !== "restore" || typeof entry.data.summary !== "string") return undefined;
+			return {
+				id: typeof entry.data.summaryId === "string" ? entry.data.summaryId : "unknown",
+				label: typeof entry.data.label === "string" ? entry.data.label : "context snapshot",
+				summary: entry.data.summary,
+				createdAt: entry.data.createdAt,
+				wasDirty: entry.data.wasDirty === true,
+				forced: entry.data.forced === true,
+			};
 		})
-		.filter((message): message is AgentMessage => message !== undefined);
+		.filter((summary): summary is { id: string; label: string; summary: string; createdAt: unknown; wasDirty: boolean; forced: boolean } => summary !== undefined)
+		.slice(-CONFIG.payload.maxSnapshotSummaries)
+		.reverse();
+
+	if (summaries.length === 0) return "(no saved ContextSnapshot restore summaries found)";
+
+	const rendered = summaries
+		.map((summary) => {
+			const meta = [
+				formatTimestamp(summary.createdAt),
+				summary.wasDirty ? "dirty" : undefined,
+				summary.forced ? "forced" : undefined,
+			]
+				.filter((part): part is string => Boolean(part))
+				.join(", ");
+			return [`### ${summary.id}: ${summary.label}${meta ? ` (${meta})` : ""}`, summary.summary].join("\n");
+		})
+		.join("\n\n");
+
+	return truncateText(rendered, CONFIG.payload.maxSnapshotChars);
 }
 
-function activeToolInventory(pi: ExtensionAPI): string {
-	const active = new Set(pi.getActiveTools().filter((name) => name !== TOOL_NAME));
-	const tools = pi.getAllTools().filter((tool) => active.has(tool.name));
-	if (tools.length === 0) return "(no active executor tools)";
-	return tools
-		.sort((a, b) => a.name.localeCompare(b.name))
-		.map((tool) => [`### ${tool.name}`, tool.description, `Parameters: ${compactJson(tool.parameters)}`].join("\n"))
+function latestAdvisorGuidance(ctx: ExtensionContext): string {
+	const results = ctx.sessionManager
+		.getBranch()
+		.map((entry) => {
+			if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.toolName !== ADVISOR_TOOL_NAME) return undefined;
+			const text = visibleTextOfContent(entry.message.content);
+			if (!text) return undefined;
+			return {
+				status: entry.message.isError ? "error" : "ok",
+				text: truncateText(text, CONFIG.payload.maxAdvisorResultChars),
+				timestamp: formatTimestamp((entry.message as unknown as Record<string, unknown>).timestamp),
+			};
+		})
+		.filter((result): result is { status: string; text: string; timestamp: string | undefined } => result !== undefined)
+		.slice(-CONFIG.payload.maxAdvisorResults)
+		.reverse();
+
+	if (results.length === 0) return "(no recent advisor guidance found)";
+
+	const rendered = results
+		.map((result, index) => {
+			const title = `### Advisor result ${index + 1}${result.timestamp ? ` (${result.timestamp})` : ""} — ${result.status}`;
+			return `${title}\n${result.text}`;
+		})
+		.join("\n\n");
+
+	return truncateText(rendered, CONFIG.payload.maxAdvisorChars);
+}
+
+function recentConversation(ctx: ExtensionContext): string {
+	const messages = ctx.sessionManager
+		.getBranch()
+		.map((entry) => {
+			if (entry.type !== "message") return undefined;
+			const { message } = entry;
+			if (message.role !== "user" && message.role !== "assistant") return undefined;
+			const text = visibleTextOfContent(message.content);
+			if (!text) return undefined;
+			return {
+				role: message.role,
+				text: truncateText(text, CONFIG.payload.maxConversationMessageChars),
+				timestamp: formatTimestamp((message as unknown as Record<string, unknown>).timestamp),
+			};
+		})
+		.filter((message): message is { role: "user" | "assistant"; text: string; timestamp: string | undefined } => message !== undefined)
+		.slice(-CONFIG.payload.maxConversationMessages);
+
+	if (messages.length === 0) return "(no recent user/assistant text found)";
+
+	const rendered = messages
+		.map((message, index) => {
+			const role = message.role === "user" ? "USER" : "ASSISTANT";
+			const title = `### ${index + 1}. ${role}${message.timestamp ? ` (${message.timestamp})` : ""}`;
+			return `${title}\n${message.text}`;
+		})
 		.join("\n\n---\n\n");
+
+	return truncateText(rendered, CONFIG.payload.maxConversationChars);
 }
 
 function buildSeniorSystemPrompt(): string {
@@ -326,25 +375,20 @@ function buildSeniorSystemPrompt(): string {
 }
 
 function buildPayload(params: SeniorParams, ctx: ExtensionContext, pi: ExtensionAPI): { text: string; chars: number; estimatedTokens: number } {
-	const messages = stripInflightSeniorDevCall(sessionMessages(ctx));
-	const transcript = messages.map(serializeAgentMessage).join("\n\n---\n\n") || "(no conversation messages found)";
 	const contextUsage = ctx.getContextUsage();
 	const activeModel = modelKey(ctx.model) ?? "(none)";
 	const classification = classifyModel(ctx.model);
-	const activeTools = activeToolInventory(pi);
-	const systemPrompt = ctx.getSystemPrompt();
 	const sessionFile = ctx.sessionManager.getSessionFile?.() ?? "(ephemeral)";
 
-	const payload = [
+	const payload = enforceTotalPayloadBudget([
 		"# Senior Dev Consultation Packet",
-		"This packet is for a senior model that guides the active coding agent. It is diagnostic context, not a user-facing prompt.",
+		"This packet is for a senior model that guides the active coding agent. It is a bounded diagnostic extract, not a raw transcript.",
+		"Large tool outputs, ordinary tool calls/results, bash traces, images, custom state noise, and older turns are intentionally omitted. Treat omissions as uncertainty and tell the agent exactly what to inspect if missing evidence matters.",
 		"",
 		"## Agent request to senior_dev",
 		`Stage: ${params.stage ?? "other"}`,
 		`Question: ${params.question}`,
-		params.current_plan ? `Current plan:\n${params.current_plan}` : undefined,
 		params.uncertainty ? `Uncertainty / concern:\n${params.uncertainty}` : undefined,
-		params.files_or_symbols?.length ? `Files or symbols in focus:\n${params.files_or_symbols.map((x) => `- ${x}`).join("\n")}` : undefined,
 		"",
 		"## Runtime context",
 		`cwd: ${ctx.cwd}`,
@@ -353,21 +397,25 @@ function buildPayload(params: SeniorParams, ctx: ExtensionContext, pi: Extension
 		`model classification: ${classification}`,
 		`thinking level: ${String((pi as unknown as { getThinkingLevel?: () => string }).getThinkingLevel?.() ?? "unknown")}`,
 		contextUsage ? `context usage estimate: ${contextUsage.tokens.toLocaleString()} tokens` : "context usage estimate: unavailable",
+		`senior_dev payload cap: ${CONFIG.payload.maxTotalChars.toLocaleString()} chars`,
 		"",
-		"## Active executor tools",
-		activeTools,
+		"## TODO.md",
+		readTodoMd(ctx),
 		"",
-		"## Current system prompt / instructions seen by the agent",
-		systemPrompt || "(empty)",
+		"## Recent ContextSnapshot summaries",
+		latestContextSnapshotSummaries(ctx),
 		"",
-		"## Conversation and tool trace",
-		transcript,
+		"## Recent advisor guidance",
+		latestAdvisorGuidance(ctx),
+		"",
+		"## Recent conversation (bounded user/assistant text only)",
+		recentConversation(ctx),
 		"",
 		"## What the senior model should return",
-		"Give the agent one recommended next move, with concise rationale and checks. If the trace is missing critical evidence, say exactly what to inspect next.",
+		"Give the agent one recommended next move, with concise rationale and checks. If this bounded packet is missing critical evidence, say exactly what to inspect next.",
 	]
 		.filter((part): part is string => part !== undefined)
-		.join("\n");
+		.join("\n"));
 
 	return { text: payload, chars: payload.length, estimatedTokens: approxTokens(payload.length) };
 }
@@ -554,9 +602,7 @@ async function executeSeniorDev(
 const SeniorParamsSchema = Type.Object({
 	question: Type.String({ description: "The concrete decision, plan, bug, or concern the senior model should guide. Ask for direction before acting." }),
 	stage: Type.Optional(StringEnum(["planning", "architecture", "implementation", "debugging", "review", "other"] as const, { description: "Where you are in the work." })),
-	current_plan: Type.Optional(Type.String({ description: "Your current intended approach, if you have one." })),
 	uncertainty: Type.Optional(Type.String({ description: "What you are unsure about, what failed, or what might be risky." })),
-	files_or_symbols: Type.Optional(Type.Array(Type.String(), { description: "Files, functions, types, commands, or symbols that seem relevant." })),
 });
 
 function registerSeniorTool(pi: ExtensionAPI): void {
@@ -622,7 +668,7 @@ function seniorGuidance(pi: ExtensionAPI, ctx: ExtensionContext, classification:
 	return [
 		"`senior_dev` is available for routine senior-model steering.",
 		"Use `senior_dev` liberally before making architectural decisions, before non-trivial implementation plans, when debugging is uncertain, after repeated failures, and before final review.",
-		"When calling `senior_dev`, state your concrete question, current plan, uncertainty, and relevant files/symbols. The senior model will provide one recommended next move.",
+		"When calling `senior_dev`, state your concrete question, stage, and uncertainty. The senior model will receive bounded project context and provide one recommended next move.",
 		"Treat `senior_dev` guidance as directing your approach unless direct project evidence contradicts it.",
 		"Do not confuse `senior_dev` with `advisor`: advisor is still only for exceptional unblocker situations.",
 	].join("\n");
