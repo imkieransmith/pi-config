@@ -609,10 +609,12 @@ function registerSeniorTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Senior Dev",
-		description: "Consult a senior developer for routine steering. Use senior_dev liberally before architectural decisions, non-trivial plans, uncertain debugging, repeated failures, and final review. The senior model returns one recommended next move.",
-		promptSnippet: "Consult a senior developer for routine steering before architecture, planning, debugging, and review.",
+		description: "Consult a senior developer for routine steering. Use senior_dev liberally before architectural decisions, uncertain debugging, and repeated failures. Also use it after drafting any plan but before presenting that plan to the user, and after completing planned work but before the final user-facing response. The senior model returns one recommended next move.",
+		promptSnippet: "Consult a senior developer before architecture/debugging risks, after drafting plans before presenting them, and after completing planned work before final response.",
 		promptGuidelines: [
-			"Use `senior_dev` liberally before architecture decisions, before non-trivial implementation plans, when debugging is uncertain, after repeated failures, and before final review.",
+			"Use `senior_dev` liberally before architecture decisions, before non-trivial implementation plans, when debugging is uncertain, and after repeated failures.",
+			"After drafting any plan, call `senior_dev` before presenting the plan to the user; revise the plan from the guidance, then present the finalised version.",
+			"After completing planned work, call `senior_dev` before the final user-facing completion response; treat it as a sanity check on risks, missed verification, and follow-up work.",
 			"Treat `senior_dev` as the senior engineer directing your approach. It will return one recommended next move; follow it unless direct project evidence contradicts it.",
 			"Do not use `senior_dev` as a replacement for `advisor`. The `advisor` tool remains reserved for exceptional unblocker situations.",
 		],
@@ -667,7 +669,9 @@ function seniorGuidance(pi: ExtensionAPI, ctx: ExtensionContext, classification:
 	if (classification !== "weak" && override !== "enabled") return undefined;
 	return [
 		"`senior_dev` is available for routine senior-model steering.",
-		"Use `senior_dev` liberally before making architectural decisions, before non-trivial implementation plans, when debugging is uncertain, after repeated failures, and before final review.",
+		"Use `senior_dev` liberally before making architectural decisions, before non-trivial implementation plans, when debugging is uncertain, and after repeated failures.",
+		"After drafting any plan, call `senior_dev` before presenting it to the user; revise the plan from the guidance, then present the finalised version.",
+		"After completing planned work, call `senior_dev` before the final user-facing completion response; make sure TODO.md and any ContextSnapshot summary capture the key facts because ordinary tool traces are intentionally omitted from the senior packet.",
 		"When calling `senior_dev`, state your concrete question, stage, and uncertainty. The senior model will receive bounded project context and provide one recommended next move.",
 		"Treat `senior_dev` guidance as directing your approach unless direct project evidence contradicts it.",
 		"Do not confuse `senior_dev` with `advisor`: advisor is still only for exceptional unblocker situations.",

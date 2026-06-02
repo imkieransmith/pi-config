@@ -116,7 +116,7 @@ Any constraints, decisions, or known risks recorded here.
 - Each task must be checkable as done/not done.
 - No vague items like "fix things" or "improve code".
 
-After writing the file, give the user a summary describing the plan, thinking, and intent behind it. Then ask for confirmation to start, or for any plan amends.
+After writing the file, call `senior_dev` with `stage: "planning"` before showing the plan to the user **only if the `senior_dev` tool is explicitly present in your available tools**. If the tool is not present, skip this step silently and do not mention it. When called, ask it to sanity-check the draft plan for architecture risks, missing tasks, verification gaps, and unclear assumptions. Apply its guidance to `TODO.md` unless direct project evidence contradicts it. Then give the user a summary describing the finalised plan, thinking, and intent behind it, and ask for confirmation to start or for any plan amends.
 
 ---
 
@@ -154,7 +154,9 @@ When all tasks are marked `[x]`:
 
 1. Call `ContextSnapshot restore` with a summary covering Goal, Key facts, Files with line numbers/functions/symbols, and Outstanding. A good restore summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps.
 2. Pass `force: true` because execution will have made the checkpoint dirty.
-3. Then tell the user: `All tasks in TODO.md are complete.`
+3. Call `senior_dev` with `stage: "review"` before the final user-facing completion response **only if the `senior_dev` tool is explicitly present in your available tools**. If the tool is not present, skip this step silently and do not mention it. When called, ask it to sanity-check completed work for missed verification, regressions, architectural risks, and follow-up tasks. The final ContextSnapshot summary and checked `TODO.md` should give it the key context because ordinary tool traces may be omitted.
+4. If `senior_dev` was called and identifies required follow-up work, do not declare completion yet. Add the work to `TODO.md` under `## Discovered Tasks`, tell the user what was found and why it is needed, and ask for approval before continuing.
+5. Then tell the user: `All tasks in TODO.md are complete.`
 
 ---
 
