@@ -306,9 +306,46 @@ function classifyBashPiReferences(command: string): Decision {
   return ALLOW;
 }
 
+function stripHeredocBodies(command: string): string {
+  const lines = command.split(/\r?\n/);
+  const output: string[] = [];
+  const pendingDelimiters: Array<{ word: string; allowLeadingTabs: boolean }> = [];
+
+  const heredocPattern = /<<-?\s*(?:"([^"]+)"|'([^']+)'|\\?([^\s;&|()<>]+))/g;
+
+  for (const line of lines) {
+    const pending = pendingDelimiters[0];
+    if (pending) {
+      const comparable = pending.allowLeadingTabs ? line.replace(/^\t+/, "") : line;
+      if (comparable === pending.word) {
+        output.push(line);
+        pendingDelimiters.shift();
+      } else if (output[output.length - 1] !== "[heredoc body omitted]") {
+        output.push("[heredoc body omitted]");
+      }
+      continue;
+    }
+
+    output.push(line);
+
+    for (const match of line.matchAll(heredocPattern)) {
+      const token = match[0];
+      const word = match[1] ?? match[2] ?? match[3];
+      if (!word) continue;
+      pendingDelimiters.push({ word, allowLeadingTabs: token.startsWith("<<-") });
+    }
+  }
+
+  return output.join("\n");
+}
+
 function shellRewriteTargetsOnlyTodo(command: string): boolean {
   const refs = shellFileReferences(command);
   return refs.some(isTodoPlanningNote) && refs.every(isTodoPlanningNote);
+}
+
+function shellHeredocWritesOnlyTodo(command: string): boolean {
+  return /<<-?\s*/.test(command) && shellWriteOperators.test(command) && shellRewriteTargetsOnlyTodo(command);
 }
 
 /** These files can turn later ordinary commands into arbitrary code execution. */
@@ -438,9 +475,15 @@ function confirm(reason: string, detail: string): Decision {
 
 /** Bash is not parseable with regex, so this is conservative damage reduction. */
 function classifyBash(command: string): Decision {
+  const commandWithoutHeredocBodies = stripHeredocBodies(command);
+  const todoOnlyHeredocWrite = shellHeredocWritesOnlyTodo(commandWithoutHeredocBodies);
+  const commandForHardRules = todoOnlyHeredocWrite ? commandWithoutHeredocBodies : command;
+
   for (const rule of hardBashRules) {
-    if (rule.pattern.test(command)) return block(rule.reason, command);
+    if (rule.pattern.test(commandForHardRules)) return block(rule.reason, commandForHardRules);
   }
+
+  if (todoOnlyHeredocWrite) return ALLOW;
 
   const piDecision = classifyBashPiReferences(command);
   if (piDecision.action !== "allow") return piDecision;
