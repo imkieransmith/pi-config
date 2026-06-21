@@ -1,18 +1,34 @@
 /**
  * Block dangerous commands, protect sensitive paths.
  *
+ * Ownership boundary (see also confirm-destructive.ts):
+ *   - This extension is the SECURITY boundary: hard blocks for forbidden/
+ *     dangerous actions (privilege escalation, disk/device destruction, remote
+ *     script execution, secret exfiltration), secret-path protection, the
+ *     Pi-internal tier system, read/discovery gating, and outside-project
+ *     mutation. Plus security-flavoured confirms (package managers, network
+ *     fetch, project scripts, executable-config mutation).
+ *   - DATA-LOSS confirms (rm, git reset --hard, git clean, find -delete,
+ *     truncate, etc.) are owned by confirm-destructive.ts, which is
+ *     git-recoverability aware. They are deliberately NOT duplicated here to
+ *     avoid double prompts. Confirmations share a per-session allow-list via
+ *     ./shared/confirm-gate.
+ *
  * Original - https://github.com/michalvavra/agents/blob/main/agents/pi/extensions/security.ts
  */
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { realpath } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { installSessionAllowReset, requestSessionConfirm } from "./shared/confirm-gate.js";
 
 type Decision = {
   action: "allow" | "confirm" | "block";
   reason?: string;
   title?: string;
   detail?: string;
+  /** Groups "allow for this session" decisions; only used for confirms. */
+  allowKey?: string;
 };
 
 type PathIntent = "read" | "mutate" | "discover";
@@ -52,16 +68,18 @@ const hardBashRules: Rule[] = [
   { pattern: /\b(?:HISTFILE\s*=|HISTSIZE\s*=\s*0|unset\s+HISTFILE)\b/i, reason: "history suppression" },
 ];
 
+// Data-loss confirms (rm, git reset --hard, git clean, find -delete, truncate)
+// are intentionally absent: confirm-destructive.ts owns them with git-
+// recoverability awareness. Duplicating them here caused double prompts. Keep
+// only security-flavoured confirms that confirm-destructive does not cover.
+// (sed -i / perl -pi stay here: in-place source rewrites are a security concern,
+// not a git-recoverable data-loss case that confirm-destructive handles.)
 const confirmBashRules: Rule[] = [
   { pattern: /\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|update|upgrade|dlx|exec|create)\b/i, reason: "package manager mutation/execution" },
   { pattern: /\b(?:pip|pip3|uv|poetry|cargo|gem|go)\s+(?:install|add|get|update|run)\b/i, reason: "dependency or tool execution" },
   { pattern: /\b(?:docker|podman|kubectl|helm)\b/i, reason: "container or cluster command" },
   { pattern: /\b(?:curl|wget|fetch)\b/i, reason: "network fetch" },
-  { pattern: /\bgit\s+reset\s+--hard\b/i, reason: "hard git reset" },
-  { pattern: /\bgit\s+clean\b/i, reason: "git clean" },
-  { pattern: /\brm\s+-(?:[^\s]*r|-[^\s]*recursive)\b/i, reason: "recursive delete" },
-  { pattern: /\bfind\b.*\s-delete\b/i, reason: "find delete" },
-  { pattern: /\b(?:truncate|perl\s+-pi|sed\s+-i)\b/i, reason: "in-place file rewrite" },
+  { pattern: /\b(?:perl\s+-pi|sed\s+-i)\b/i, reason: "in-place file rewrite" },
   { pattern: /\bchmod\b.*(?:\+x|[0-7]*[1357][0-7]?)\b/i, reason: "executable permission change" },
   { pattern: /\b(?:make|just|task|rake)\b/i, reason: "project script execution" },
 ];
@@ -84,21 +102,6 @@ const shellWordPattern = /"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+/g;
 /** Notify only when Pi is running with an interactive UI. */
 function notify(ctx: ExtensionContext, message: string): void {
   if (ctx.hasUI) ctx.ui.notify(message, "warning");
-}
-
-/** Confirmation gates must fail closed in print, JSON, and other non-UI modes. */
-async function confirmOrBlock(
-  ctx: ExtensionContext,
-  title: string,
-  detail: string,
-  noUiReason: string,
-): Promise<Decision | undefined> {
-  if (!ctx.hasUI) {
-    return { action: "block", reason: `${noUiReason} (no UI to confirm)` };
-  }
-
-  const ok = await ctx.ui.confirm(title, detail);
-  return ok ? undefined : { action: "block", reason: `${noUiReason} blocked by user` };
 }
 
 /** Treat common user-facing path syntax as real filesystem paths. */
@@ -445,6 +448,7 @@ async function classifyPath(
       reason: "modifying Pi authoring surface",
       title: "Security check: modify Pi authoring surface?",
       detail: rawPath,
+      allowKey: "security:authoring-surface",
     };
   }
   if (piTier === "private") {
@@ -474,6 +478,7 @@ async function classifyPath(
         reason: `modifying ${soft}`,
         title: `Security check: modify ${soft}?`,
         detail: rawPath,
+        allowKey: `security:mutate:${soft}`,
       };
     }
   }
@@ -493,6 +498,7 @@ function confirm(reason: string, detail: string): Decision {
     reason,
     title: `Security check: ${reason}?`,
     detail,
+    allowKey: `security:${reason}`,
   };
 }
 
@@ -538,14 +544,19 @@ async function handleDecision(decision: Decision, ctx: ExtensionContext): Promis
   }
 
   const reason = decision.reason ?? "security confirmation required";
-  const denied = await confirmOrBlock(
+  const outcome = await requestSessionConfirm(
     ctx,
-    decision.title ?? "Security check",
-    decision.detail ?? reason,
+    {
+      title: decision.title ?? "Security check",
+      detail: decision.detail ?? reason,
+      allowKey: decision.allowKey ?? `security:${reason}`,
+    },
     reason,
   );
 
-  return denied ? handleDecision(denied, ctx) : undefined;
+  if (outcome.allow) return undefined;
+  notify(ctx, `Security blocked: ${reason}`);
+  return { block: true, reason: outcome.reason ?? `${reason} blocked by user` };
 }
 
 /** Built-in file tools consistently carry their target path in path. */
@@ -570,7 +581,8 @@ function formatSecurityStatus(): string {
     "status: active",
     "protects:",
     "- blocks high-risk bash patterns such as privilege escalation, destructive disk commands, remote script execution, and secret exfiltration patterns",
-    "- confirms package manager, container, network fetch, recursive delete, and project script commands when an interactive UI is available",
+    "- confirms package manager, container, network fetch, in-place rewrite, and project script commands when an interactive UI is available (with an 'allow for this session' option)",
+    "- defers file/git data-loss prompts (rm, git reset --hard, git clean, find -delete, truncate) to the confirm-destructive extension to avoid double prompts",
     "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, private keys, and secret-like filenames",
     "- allows normal Pi repo docs and authoring reads, while blocking private Pi runtime state such as sessions, logs, caches, state, and debug payloads",
     "- asks for confirmation before modifying Pi authoring surfaces such as personal extensions and skills",
@@ -589,6 +601,8 @@ function showCommandMessage(pi: ExtensionAPI, content: string): void {
 }
 
 export default function (pi: ExtensionAPI) {
+  installSessionAllowReset(pi);
+
   pi.registerCommand("security", {
     description: "Show security gate status and protected actions.",
     getArgumentCompletions: (prefix: string) => {

@@ -1,6 +1,18 @@
 /**
  * Confirm destructive tool calls before they run.
  *
+ * Ownership boundary (see also security.ts):
+ *   - This extension is the DATA-LOSS safety net: git-recoverability-aware
+ *     confirms for actions that can destroy unrecoverable work (rm, git rm,
+ *     git reset --hard, git clean, find -delete, truncate, dd to a file,
+ *     prisma/db destructive SQL, file overwrites, large edit removals, and
+ *     destructively-named custom tools). It also gates user-typed bash.
+ *   - HARD security blocks (disk/device destruction such as mkfs/fdisk/parted/
+ *     wipefs, dd to /dev/, rsync --delete, shred, privilege escalation, etc.)
+ *     are owned by security.ts. Those are intentionally NOT confirmed here, so a
+ *     command is never gated by both extensions.
+ *   - Confirmations share a per-session allow-list via ./shared/confirm-gate.
+ *
  * Original - https://github.com/spences10/my-pi/tree/main/packages/pi-confirm-destructive
  */
 
@@ -17,6 +29,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, isAbsolute, relative, resolve } from 'node:path';
+import { installSessionAllowReset, requestSessionConfirm } from './shared/confirm-gate.js';
 
 export interface DestructiveAction {
 	title: string;
@@ -64,25 +77,17 @@ const DESTRUCTIVE_COMMAND_PATTERNS: DestructiveCommandPattern[] = [
 		allow_key: 'bash:git-discard-all',
 	},
 	{
-		pattern: /(^|[;&|]\s*)rsync\b[^;&|]*\s--delete\b/,
-		reason: 'Deletes destination files during sync',
-		allow_key: 'bash:rsync-delete',
-	},
-	{
 		pattern:
 			/(^|[;&|]\s*)truncate\b[^;&|]*(\s-s\s*0\b|\s--size\s*=?\s*0\b)/,
 		reason: 'Empties file contents',
 		allow_key: 'bash:truncate-zero',
 	},
 	{
-		pattern: /(^|[;&|]\s*)dd\b[^;&|]*\bof=/,
-		reason: 'Overwrites a device or file with dd',
+		// dd to a regular file. dd to a device (of=/dev/...) is hard-blocked by
+		// security.ts, so it is deliberately excluded here.
+		pattern: /(^|[;&|]\s*)dd\b[^;&|]*\bof=(?!\/dev\/)/,
+		reason: 'Overwrites a file with dd',
 		allow_key: 'bash:dd-output',
-	},
-	{
-		pattern: /(^|[;&|]\s*)(mkfs|fdisk|parted|wipefs)\b/,
-		reason: 'Modifies disks or filesystems',
-		allow_key: 'bash:disk-tool',
 	},
 ];
 
@@ -177,7 +182,7 @@ function extract_command_paths(
 	const command_index =
 		command_name === 'rm'
 			? words.findIndex((word) =>
-					['rm', 'rmdir', 'unlink', 'shred'].includes(word),
+					['rm', 'rmdir', 'unlink'].includes(word),
 				)
 			: words.findIndex(
 					(word, index) =>
@@ -213,8 +218,10 @@ function assess_rm_command(
 	cwd: string,
 	session_created_paths: ReadonlySet<string> = new Set(),
 ): DestructiveAction | undefined {
+	// shred is hard-blocked by security.ts (disk destruction), so it is omitted
+	// here to keep each command owned by exactly one gate.
 	if (
-		!/(^|[;&|]\s*)(sudo\s+)?(rm|rmdir|unlink|shred)\b/.test(command)
+		!/(^|[;&|]\s*)(sudo\s+)?(rm|rmdir|unlink)\b/.test(command)
 	) {
 		return undefined;
 	}
@@ -435,28 +442,6 @@ export function assess_tool_call(
 	return assess_custom_tool(event);
 }
 
-type ConfirmDecision = 'allow' | 'allow-similar' | 'block';
-
-async function confirm_action(
-	action: DestructiveAction,
-	ctx: ExtensionContext,
-): Promise<ConfirmDecision> {
-	if (!ctx.hasUI) return 'block';
-
-	const choice = await ctx.ui.select(
-		`${action.title}\n${action.description}`,
-		['Allow once', 'Allow similar for this session', 'Block'],
-	);
-
-	if (choice === 'Allow once') return 'allow';
-	if (choice === 'Allow similar for this session') {
-		return 'allow-similar';
-	}
-
-	ctx.ui.notify('Destructive action blocked', 'info');
-	return 'block';
-}
-
 function blocked_reason(action: DestructiveAction): string {
 	return `Blocked destructive action: ${action.reason}`;
 }
@@ -471,26 +456,22 @@ function blocked_bash_result(action: DestructiveAction) {
 }
 
 export default async function confirm_destructive(pi: ExtensionAPI) {
-	const allowed_for_session = new Set<string>();
+	installSessionAllowReset(pi);
+
 	const pending_created_files = new Map<string, string>();
 	const session_created_files = new Set<string>();
 
-	function is_allowed(action: DestructiveAction): boolean {
-		return allowed_for_session.has(action.allow_key);
-	}
-
+	// 3-way confirm with a per-session allow-list shared with security.ts.
 	async function should_allow(
 		action: DestructiveAction,
 		ctx: ExtensionContext,
 	): Promise<boolean> {
-		if (is_allowed(action)) return true;
-
-		const decision = await confirm_action(action, ctx);
-		if (decision === 'allow-similar') {
-			allowed_for_session.add(action.allow_key);
-			return true;
-		}
-		return decision === 'allow';
+		const outcome = await requestSessionConfirm(
+			ctx,
+			{ title: action.title, detail: action.description, allowKey: action.allow_key },
+			blocked_reason(action),
+		);
+		return outcome.allow;
 	}
 
 	pi.on(
