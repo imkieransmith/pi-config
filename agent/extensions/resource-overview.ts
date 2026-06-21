@@ -30,7 +30,7 @@ type CommandInfo = {
 const EXTENSION_MANIFEST: Record<string, { title: string; description: string }> = {
   "advisor": {
     title: "Advisor",
-    description: "Let the model ask a stronger model for a second opinion before it acts.",
+    description: "Consult a configured reviewer model for a recommended next move on the current work.",
   },
   "ask-user-question": {
     title: "Ask User Question",
@@ -79,10 +79,6 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
   "security.ts": {
     title: "Security Guard",
     description: "Confirms or blocks risky commands and sensitive file access.",
-  },
-  "senior-dev": {
-    title: "Senior Dev",
-    description: "Routine senior-model steering for selected coding models.",
   },
   "session-query.ts": {
     title: "Session Query",

@@ -231,7 +231,7 @@ function isPiPrivateRuntimePath(absPath: string, home: string): boolean {
     path.join(home, ".pi", "agent", "state"),
     path.join(home, ".pi", "agent", "tmp"),
     path.join(home, ".pi", "agent", "evidence"),
-    path.join(home, ".pi", "agent", "senior-dev"),
+    path.join(home, ".pi", "agent", "advisor"),
   ].some((dir) => isInside(dir, absPath));
 }
 
@@ -396,7 +396,7 @@ function sensitiveFilePattern(value: string): string | undefined {
   if (/(^|\/)\.env(?!\.example(?:$|\/))[^/]*/i.test(normalized)) return "environment file";
   if (/(^|\/)\.dev\.vars[^/]*/i.test(normalized)) return "dev vars file";
   if (/(^|\/)\.(?:ssh|gnupg|git)(?:$|\/)/i.test(normalized)) return "sensitive directory";
-  if (/(^|\/)\.pi\/agent\/(?:sessions|history|cache|logs|state|tmp|evidence|senior-dev)(?:$|\/)/i.test(normalized)) return "Pi private runtime state";
+  if (/(^|\/)\.pi\/agent\/(?:sessions|history|cache|logs|state|tmp|evidence|advisor)(?:$|\/)/i.test(normalized)) return "Pi private runtime state";
   if (/\.(?:pem|key)(?:$|[^\w])/i.test(normalized)) return "private key file";
   if (/\b(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)\b/i.test(normalized)) return "SSH private key";
   if (/(?:secret|credentials?|tokens?|api[_-]?keys?)/i.test(normalized)) return "secret material";

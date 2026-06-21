@@ -11,7 +11,7 @@ The code here is intended as a working personal config rather than a polished pa
 This repo is a personal Pi setup: agent-facing extensions, skills, and UI helpers that are loaded into Pi sessions.
 
 ### Extensions
-- **Advisor** (`advisor`) — Let the model ask a stronger model for a second opinion before it acts.
+- **Advisor** (`advisor`) — Consult a configured reviewer model for a recommended next move; framing adapts to the active model (use liberally on weaker models, when stuck on strong ones).
 - **Ask User Question** (`ask-user-question`) — Interactive multiple-choice clarification tool for agents.
 - **Colour Messages** (`colour-messages`) — Background colours for user, working, and final assistant rows.
 - **Confirm Destructive** (`confirm-destructive.ts`) — Confirm destructive tool calls and bash commands before they run.
@@ -24,7 +24,6 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Resource Overview** (`resource-overview.ts`) — Richer startup overview for loaded skills and extensions.
 - **RTK Rewrite** (`rtk.ts`) — Best-effort shell command optimization via `rtk rewrite`.
 - **Security Guard** (`security.ts`) — Confirms or blocks risky commands and sensitive file access.
-- **Senior Dev** (`senior-dev`) — Routine senior-model steering for selected coding models.
 - **Session Query** (`session-query.ts`) — Query previous sessions, including custom state and summaries.
 - **Superset Hooks** (`superset-hooks.ts`) — Emit Superset lifecycle hooks so the host shows a working indicator.
 - **Tool Pills** (`tool-pills`) — Compact colored tool call/result rendering and syntax-highlighted diffs.
