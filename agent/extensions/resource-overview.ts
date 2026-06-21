@@ -47,6 +47,14 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
     title: "Ask User Question",
     description: "Interactive multiple-choice clarification tool for agents.",
   },
+  "colour-messages": {
+    title: "Colour Messages",
+    description: "Background colours for user, working, and final assistant rows.",
+  },
+  "confirm-destructive.ts": {
+    title: "Confirm Destructive",
+    description: "Confirm destructive tool calls and bash commands before they run.",
+  },
   "context.ts": {
     title: "Context Snapshot",
     description: "Durable investigation checkpoints and restore summaries.",
@@ -90,6 +98,10 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
   "session-query.ts": {
     title: "Session Query",
     description: "Query previous sessions, including custom state and summaries.",
+  },
+  "superset-hooks.ts": {
+    title: "Superset Hooks",
+    description: "Emit Superset lifecycle hooks so the host shows a working indicator.",
   },
   "tool-pills": {
     title: "Tool Pills",

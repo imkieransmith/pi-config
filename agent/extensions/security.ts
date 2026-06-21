@@ -171,10 +171,28 @@ function isPiPlanningNote(absPath: string, home: string): boolean {
   return absPath === path.join(home, ".pi", "PLAN.md") || absPath === path.join(home, ".pi", "TODO.md");
 }
 
-/** Root-level docs describe this personal Pi repo and are safe to maintain. */
+// Maintainable metadata at the .pi repo root. These are tracked in git and are
+// part of working on this personal Pi config, so reads/discovery are safe.
+// Genuinely sensitive runtime config (settings/auth/models/providers .json) is
+// deliberately NOT listed here — it stays in the private/config tiers below.
+const PI_ROOT_PUBLIC_FILES = new Set([
+  ".gitignore",
+  "license",
+  "license.md",
+  "license.txt",
+  "package.json",
+  "package-lock.json",
+  "append_system.md",
+  "tsconfig.json",
+]);
+
+/** Root-level docs/metadata describe this personal Pi repo and are safe to maintain. */
 function isPiRootPublicFile(absPath: string, home: string): boolean {
   const piRoot = path.join(home, ".pi");
-  return path.dirname(absPath) === piRoot && (/^(?:README(?:\.[\w-]+)?|TODO|PLAN)\.md$/i.test(path.basename(absPath)) || path.basename(absPath) === ".gitignore");
+  if (path.dirname(absPath) !== piRoot) return false;
+  const base = path.basename(absPath);
+  if (/^(?:README(?:\.[\w-]+)?|TODO|PLAN)\.md$/i.test(base)) return true;
+  return PI_ROOT_PUBLIC_FILES.has(base.toLowerCase());
 }
 
 /** A small amount of directory discovery is needed to work on the personal Pi repo. */
@@ -414,7 +432,12 @@ async function classifyPath(
   }
 
   const piTier = classifyPiPath(absPath, home);
-  if (piTier === "public") return ALLOW;
+  if (piTier === "public") {
+    // Reads and discovery of the maintainable repo surface are always fine.
+    // Mutations fall through to the standard project-scope / sensitive-config
+    // confirmation checks below (e.g. editing package.json still confirms).
+    if (intent !== "mutate") return ALLOW;
+  }
   if (piTier === "authoring") {
     if (intent !== "mutate") return ALLOW;
     return {

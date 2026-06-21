@@ -82,6 +82,25 @@ function patchRender(
 	};
 }
 
+// ===========================================================================
+// MONKEY-PATCH (pi internals): this extension overrides the `render()` method on
+// pi's private message/loader components, and to reach those classes it imports
+// directly from pi's compiled `dist` directory. There is no public API for
+// per-row background colours, so this is a deliberate reach into internals.
+//
+// Fragility / maintenance — this WILL break if pi changes any of:
+//   - its dist layout or the entrypoint shape (resolvePiDistDir asserts the
+//     running CLI lives in `.../@earendil-works/pi-coding-agent/dist`),
+//   - the component file paths under modes/interactive/components/*.js,
+//   - the exported class names (UserMessageComponent, AssistantMessageComponent,
+//     ToolExecutionComponent) or their `render(width)` signature,
+//   - AssistantMessageComponent's `hasToolCalls` field used to tell an
+//     intermediate working turn from a final response.
+// Failures are made loud on purpose: resolvePiDistDir throws with a diagnostic
+// path, and patchRender no-ops if a prototype has no `render`. Re-verify these
+// assumptions on every pi upgrade; a non-patching fix would require pi to expose
+// a public row-styling / render hook.
+// ===========================================================================
 function resolvePiDistDir(): string {
 	if (!process.argv[1]) {
 		throw new Error("Could not locate the running pi CLI entrypoint: process.argv[1] is empty");

@@ -13,6 +13,8 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 ### Extensions
 - **Advisor** (`advisor`) — Let the model ask a stronger model for a second opinion before it acts.
 - **Ask User Question** (`ask-user-question`) — Interactive multiple-choice clarification tool for agents.
+- **Colour Messages** (`colour-messages`) — Background colours for user, working, and final assistant rows.
+- **Confirm Destructive** (`confirm-destructive.ts`) — Confirm destructive tool calls and bash commands before they run.
 - **Context Snapshot** (`context.ts`) — Durable investigation checkpoints and restore summaries.
 - **Custom Footer** (`custom-footer`) — Compact powerline-style footer with path, context, and model info.
 - **Evidence Store** (`evidence.ts`) — Durable citable evidence snippets with list/get/add tools.
@@ -24,6 +26,7 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Security Guard** (`security.ts`) — Confirms or blocks risky commands and sensitive file access.
 - **Senior Dev** (`senior-dev`) — Routine senior-model steering for selected coding models.
 - **Session Query** (`session-query.ts`) — Query previous sessions, including custom state and summaries.
+- **Superset Hooks** (`superset-hooks.ts`) — Emit Superset lifecycle hooks so the host shows a working indicator.
 - **Tool Pills** (`tool-pills`) — Compact colored tool call/result rendering and syntax-highlighted diffs.
 
 ### Skills

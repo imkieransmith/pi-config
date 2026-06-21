@@ -70,8 +70,12 @@ const SECRET_PATTERNS: SecretPattern[] = [
 		pattern: /tvly-[a-zA-Z0-9_-]{20,}/g,
 	},
 	{
+		// Anchored to an explicit kagi marker. The bare two-part dotted token shape
+		// on its own matches far too much (JWTs, content hashes, minified JS), so we
+		// only redact when "kagi" is present on the same line. Plain assignment forms
+		// (KAGI_API_KEY=...) are already covered by the Generic Password Field rule.
 		name: 'Kagi API Key',
-		pattern: /[a-zA-Z0-9_-]{40,}\.[a-zA-Z0-9_-]{40,}/g,
+		pattern: /\bkagi\b[^\n]{0,40}?[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}/gi,
 	},
 	{
 		name: 'Brave API Key',

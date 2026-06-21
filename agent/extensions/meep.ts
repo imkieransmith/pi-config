@@ -73,6 +73,20 @@ function playReadySound(): void {
   playSound();
 }
 
+// MONKEY-PATCH (pi internals): we wrap ctx.ui's blocking methods so the meep
+// sound plays whenever the agent stops to wait for the user — a question, a
+// confirm, or end-of-turn. This deliberately reaches into the host UI object
+// rather than relying on a dedicated event.
+//
+// Fragility / maintenance:
+//   - BLOCKING_UI_METHODS must stay in sync with pi's ExtensionContext["ui"]
+//     API. If pi renames/adds a blocking prompt method, it simply won't meep
+//     (silent no-op) — typeof guard below skips anything missing, so it never
+//     throws. Re-check this list on pi upgrades.
+//   - MEEP_UI_WRAPPED guards against double-wrapping across session_start /
+//     agent_start / tool_call / resume re-entry.
+// A non-patching alternative would be a first-class "awaiting user input" hook
+// from pi; until that exists, wrapping is the only way to cover every prompt.
 function installWaitingSound(ctx: ExtensionContext): void {
   if (!ctx.hasUI) return;
 
