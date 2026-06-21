@@ -1,5 +1,8 @@
 /**
- * Pi welcome resource overview. Shows a richer startup header for loaded skills and extensions.
+ * Pi startup overview. A compact, functional header that reminds you what this
+ * setup adds: the slash commands you can run, plus the skills and extensions
+ * loaded this session. Runtime state (cwd, context, model, thinking level) is
+ * intentionally left to the footer rather than duplicated here.
  */
 
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
@@ -14,29 +17,15 @@ type ResourceInfo = {
   filePath: string;
 };
 
-// https://patorjk.com/software/taag
-// DOS Rebel.
-// Also consider Coder Mini, Small Block, ANSI Compact.
-const HEADER_TITLE =
-  process.env.PI_RESOURCE_OVERVIEW_TITLE ||
-  String.raw`
- █████   █████  ███         █████   ████  ███
-░░███   ░░███  ░░░         ░░███   ███░  ░░░
- ░███    ░███  ████         ░███  ███    ████   ██████  ████████   ██████   ████████
- ░███████████ ░░███         ░███████    ░░███  ███░░███░░███░░███ ░░░░░███ ░░███░░███
- ░███░░░░░███  ░███         ░███░░███    ░███ ░███████  ░███ ░░░   ███████  ░███ ░███
- ░███    ░███  ░███         ░███ ░░███   ░███ ░███░░░   ░███      ███░░███  ░███ ░███
- █████   █████ █████  ██    █████ ░░████ █████░░██████  █████    ░░████████ ████ █████ ██
-░░░░░   ░░░░░ ░░░░░  ██    ░░░░░   ░░░░ ░░░░░  ░░░░░░  ░░░░░      ░░░░░░░░ ░░░░ ░░░░░ ░░
-                    ░░`;
+// Startup overview tuning. Keep this compact — the footer already shows cwd,
+// context, model, and thinking level, so this view focuses on what you can run.
+const MAX_COMMANDS = 22; // cap the command list height; overflow shows "+N more"
+const NAME_COLUMN = 16; // alignment width for the "/command" column
 
-const HEADER_SUBTITLES = [
-  "Skills and extensions available in this session.",
-];
-
-const HEADER_SUBTITLE =
-  process.env.PI_RESOURCE_OVERVIEW_SUBTITLE ||
-  HEADER_SUBTITLES[Math.floor(Math.random() * HEADER_SUBTITLES.length)];
+type CommandInfo = {
+  name: string;
+  description: string;
+};
 
 const EXTENSION_MANIFEST: Record<string, { title: string; description: string }> = {
   "advisor": {
@@ -271,42 +260,112 @@ function truncate(text: string, max: number): string {
   return `${text.slice(0, Math.max(0, max - 1))}…`;
 }
 
-function formatLine(theme: Theme, name: string, description: string, width: number): string {
-  const prefix = `  • ${name}`;
-  const separator = " — ";
-  const maxDescription = Math.max(24, width - prefix.length - separator.length - 4);
-  return `${theme.fg("accent", prefix)}${theme.fg("dim", separator)}${theme.fg("muted", truncate(description, maxDescription))}`;
+// Commands are the actionable part of this view. Skills are auto-loaded by the
+// model on demand, so skill:* entries are surfaced in the Skills section
+// instead of being repeated here.
+function loadCommands(pi: ExtensionAPI): CommandInfo[] {
+  let raw: unknown;
+  try {
+    raw = (pi as unknown as { getCommands?: () => unknown }).getCommands?.();
+  } catch {
+    raw = undefined;
+  }
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .map((entry) => {
+      const record = (entry ?? {}) as { name?: unknown; description?: unknown };
+      return {
+        name: typeof record.name === "string" ? record.name : "",
+        description: typeof record.description === "string" ? record.description : "",
+      };
+    })
+    .filter((command) => command.name.length > 0 && !command.name.startsWith("skill:"))
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function renderSection(theme: Theme, title: string, items: ResourceInfo[], width: number): string[] {
-  const count = theme.fg("dim", `(${items.length})`);
-  const lines = [theme.fg("mdHeading", `${title} ${count}`)];
-  for (const item of items) {
-    lines.push(formatLine(theme, item.title || item.name, item.description, width));
+function sectionHeading(theme: Theme, title: string, count: number): string {
+  return `${theme.fg("mdHeading", `  ${title} `)}${theme.fg("dim", `(${count})`)}`;
+}
+
+function formatCommandLine(theme: Theme, command: CommandInfo, nameWidth: number, width: number): string {
+  const indent = "    ";
+  const gap = "  ";
+  const slashName = `/${command.name}`;
+  const paddedName = slashName.length >= nameWidth ? slashName : slashName.padEnd(nameWidth);
+  const maxDescription = Math.max(16, width - indent.length - paddedName.length - gap.length - 2);
+  const description = truncate(command.description, maxDescription);
+  return `${theme.fg("accent", indent + paddedName)}${theme.fg("dim", gap)}${theme.fg("muted", description)}`;
+}
+
+function renderCommands(theme: Theme, commands: CommandInfo[], width: number): string[] {
+  if (commands.length === 0) return [];
+  const shown = commands.slice(0, MAX_COMMANDS);
+  const nameWidth = Math.min(
+    NAME_COLUMN,
+    shown.reduce((max, command) => Math.max(max, command.name.length + 1), 0),
+  );
+  const lines = [sectionHeading(theme, "Commands", commands.length)];
+  for (const command of shown) {
+    lines.push(formatCommandLine(theme, command, nameWidth, width));
+  }
+  if (commands.length > shown.length) {
+    lines.push(theme.fg("dim", `    +${commands.length - shown.length} more`));
   }
   return lines;
+}
+
+// Greedy width-aware wrap for inline name chips (plain text in, colour applied
+// after, so length math stays accurate).
+function wrapInline(items: string[], separator: string, maxWidth: number): string[] {
+  const lines: string[] = [];
+  let current = "";
+  for (const item of items) {
+    if (!current) {
+      current = item;
+    } else if (current.length + separator.length + item.length > maxWidth) {
+      lines.push(current);
+      current = item;
+    } else {
+      current += separator + item;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+function renderNames(theme: Theme, title: string, items: ResourceInfo[], width: number): string[] {
+  if (items.length === 0) return [];
+  const indent = "    ";
+  const names = items.map((item) => item.title || item.name);
+  const wrapped = wrapInline(names, " · ", Math.max(20, width - indent.length - 2));
+  return [
+    sectionHeading(theme, title, items.length),
+    ...wrapped.map((line) => theme.fg("muted", indent + line)),
+  ];
 }
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     if (!ctx.hasUI) return;
 
+    const commands = loadCommands(pi);
     const skills = loadSkills(ctx.cwd);
     const extensions = loadExtensions(ctx.cwd);
 
     ctx.ui.setHeader((_tui, theme) => ({
       invalidate() {},
       render(width: number): string[] {
-        return [
-          ...HEADER_TITLE.split("\n").map((line) => theme.fg("accent", theme.bold(line))),
+        const lines: string[] = [
           "",
-          // theme.fg("dim", HEADER_SUBTITLE),
-          // "",
-          ...renderSection(theme, "Skills", skills, width),
+          `${theme.bold(theme.fg("accent", "Pi"))}`,
           "",
-          ...renderSection(theme, "Extensions", extensions, width),
-          "",
+          ...renderCommands(theme, commands, width),
         ];
+        if (skills.length > 0) lines.push("", ...renderNames(theme, "Skills", skills, width));
+        if (extensions.length > 0) lines.push("", ...renderNames(theme, "Extensions", extensions, width));
+        lines.push("");
+        return lines;
       },
     }));
   });

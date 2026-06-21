@@ -503,7 +503,8 @@ function confirm(reason: string, detail: string): Decision {
 }
 
 /** Bash is not parseable with regex, so this is conservative damage reduction. */
-function classifyBash(command: string): Decision {
+// Exported for the de-dupe test harness; pi only invokes the default export.
+export function classifyBash(command: string): Decision {
   const commandWithoutHeredocBodies = stripHeredocBodies(command);
   const todoOnlyHeredocWrite = shellHeredocWritesOnlyTodo(commandWithoutHeredocBodies);
   const commandForHardRules = todoOnlyHeredocWrite ? commandWithoutHeredocBodies : command;
