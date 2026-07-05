@@ -24,5 +24,6 @@ auth.json
 # Local stuff
 TODO.md
 PLAN.md
+APPEND_SYSTEM.md
 # advisor debug output
 agent/advisor/
