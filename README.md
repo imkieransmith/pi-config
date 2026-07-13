@@ -11,7 +11,7 @@ The code here is intended as a working personal config rather than a polished pa
 This repo is a personal Pi setup: agent-facing extensions, skills, and UI helpers that are loaded into Pi sessions.
 
 ### Extensions
-- **Advisor** (`advisor`) — Consult a configured reviewer model for a recommended next move; framing adapts to the active model (use liberally on weaker models, when stuck on strong ones).
+- **Advisor** (`advisor`) — Code-configured, model-driven cross-family review with capability-aware usage: exceptional peer review for frontier models, gated senior review for strong models, and routine stronger review for standard models. `/advisor status` and `/advisor debug` expose diagnostics; there is no runtime picker.
 - **Ask User Question** (`ask-user-question`) — Interactive multiple-choice clarification tool for agents.
 - **Colour Messages** (`colour-messages`) — Background colours for user, working, and final assistant rows.
 - **Confirm Destructive** (`confirm-destructive.ts`) — Confirm destructive tool calls and bash commands before they run.

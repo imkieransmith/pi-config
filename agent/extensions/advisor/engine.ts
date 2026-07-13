@@ -384,7 +384,8 @@ export function buildAdvisorPayload(ctx: ExtensionContext, pi: ExtensionAPI): Ad
 function ensureDebugDir(): void {
 	if (!DEBUG.enabled) return;
 	try {
-		mkdirSync(DEBUG.dir, { recursive: true });
+		mkdirSync(DEBUG.dir, { recursive: true, mode: 0o700 });
+		chmodSync(DEBUG.dir, 0o700);
 	} catch {
 		// best effort
 	}
@@ -393,8 +394,16 @@ function ensureDebugDir(): void {
 function appendDebug(record: Record<string, unknown>): void {
 	if (!DEBUG.enabled) return;
 	ensureDebugDir();
+	const file = debugLogPath();
 	try {
-		appendFileSync(debugLogPath(), `${JSON.stringify(record)}\n`, "utf-8");
+		// Correct an existing log before appending; new logs are private at creation.
+		try {
+			chmodSync(file, 0o600);
+		} catch {
+			// File may not exist yet.
+		}
+		appendFileSync(file, `${JSON.stringify(record)}\n`, { encoding: "utf-8", mode: 0o600 });
+		chmodSync(file, 0o600);
 	} catch {
 		// debug logging must never break the tool
 	}
@@ -411,12 +420,7 @@ function writePayloadSample(callNumber: number, payload: string): string | undef
 	ensureDebugDir();
 	const file = join(DEBUG.dir, `payload-${String(callNumber).padStart(4, "0")}-${Date.now()}.md`);
 	try {
-		writeFileSync(file, payload, "utf-8");
-		try {
-			chmodSync(file, 0o600);
-		} catch {
-			// best effort
-		}
+		writeFileSync(file, payload, { encoding: "utf-8", mode: 0o600, flag: "wx" });
 		state().lastPayloadSamplePath = file;
 		return file;
 	} catch {

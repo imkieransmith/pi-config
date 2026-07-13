@@ -25,5 +25,6 @@ auth.json
 TODO.md
 PLAN.md
 APPEND_SYSTEM.md
+agent/trust.json
 # advisor debug output
 agent/advisor/
