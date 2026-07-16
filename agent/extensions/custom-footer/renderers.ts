@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 const THINKING_ROLES: Record<ThinkingLevel, string> = {
 	off: "thinkingOff",
@@ -9,6 +9,7 @@ const THINKING_ROLES: Record<ThinkingLevel, string> = {
 	medium: "thinkingMedium",
 	high: "thinkingHigh",
 	xhigh: "thinkingXhigh",
+	max: "thinkingMax",
 };
 
 type ThemeFg = { fg: (role: any, text: string) => string };
@@ -62,14 +63,14 @@ export function renderModelInfo(
 	thinking: string,
 	theme: ThemeFg,
 ): { text: string; rawWidth: number } {
-	const thinkSuffix = thinking !== "off" ? ` • ${thinking}` : "";
-	const rawWidth = visibleWidth(`⚡ ${modelName} (${provider})${thinkSuffix}`);
+	const thinkSuffix = ` • ${thinking}`;
+	const rawWidth = visibleWidth(`◈ ${modelName} (${provider})${thinkSuffix}`);
 
-	let text = theme.fg("accent", `⚡ ${modelName}`) + theme.fg("muted", ` (${provider})`);
-	if (thinking !== "off") {
-		const role = THINKING_ROLES[thinking as ThinkingLevel] ?? THINKING_ROLES.off;
-		text += theme.fg("dim", " • ") + theme.fg(role, thinking);
-	}
+	const role = THINKING_ROLES[thinking as ThinkingLevel] ?? THINKING_ROLES.off;
+	const text = theme.fg("accent", `◈ ${modelName}`)
+		+ theme.fg("muted", ` (${provider})`)
+		+ theme.fg("dim", " • ")
+		+ theme.fg(role, thinking);
 
 	return { text, rawWidth };
 }
