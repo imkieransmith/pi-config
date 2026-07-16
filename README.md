@@ -22,6 +22,7 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Plan Command** (`plan.ts`) — Deterministic `/plan` handoff that manages ContextSnapshot checkpoints.
 - **Redact Sensitive Data** (`redact.ts`) — Redact secrets from tool output.
 - **Resource Overview** (`resource-overview.ts`) — Richer startup overview for loaded skills and extensions.
+- **Response Metrics** (`response-metrics.ts`) — Persistent TUI-only elapsed-time, tool-call, and input/output-token row beneath each completed response.
 - **RTK Rewrite** (`rtk.ts`) — Best-effort shell command optimization via `rtk rewrite`.
 - **Security Guard** (`security.ts`) — Confirms or blocks risky commands and sensitive file access.
 - **Session Query** (`session-query.ts`) — Query previous sessions, including custom state and summaries.

@@ -72,6 +72,10 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
     title: "Resource Overview",
     description: "Richer startup overview for loaded skills and extensions.",
   },
+  "response-metrics.ts": {
+    title: "Response Metrics",
+    description: "Persist elapsed time, tool calls, and token usage beneath each completed response.",
+  },
   "rtk.ts": {
     title: "RTK Rewrite",
     description: "Best-effort shell command optimization via rtk rewrite.",
