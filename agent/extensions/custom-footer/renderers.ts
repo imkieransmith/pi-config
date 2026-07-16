@@ -1,7 +1,5 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-export type PermissionMode = "safe" | "read-only" | "yolo";
-
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 const THINKING_ROLES: Record<ThinkingLevel, string> = {
@@ -13,16 +11,7 @@ const THINKING_ROLES: Record<ThinkingLevel, string> = {
 	xhigh: "thinkingXhigh",
 };
 
-type ThemeFg = { fg: (role: any, text: string) => string; bold: (text: string) => string; inverse: (text: string) => string };
-
-// ── Role mappings ──────────────────────────────────────────────────────
-
-/** Theme roles for permission mode pills. */
-const MODE_ROLES: Record<PermissionMode, string> = {
-	yolo: "error", // red
-	safe: "success", // green
-	"read-only": "mdHeading", // blue
-};
+type ThemeFg = { fg: (role: any, text: string) => string };
 
 // ── Tokens ─────────────────────────────────────────────────────────────
 
@@ -31,17 +20,6 @@ export function fmtTokens(n: number): string {
 	if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
 	if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
 	return `${(n / 1_000_000).toFixed(1)}M`;
-}
-
-// ── Mode Pill ──────────────────────────────────────────────────────────
-
-export function renderModePill(mode: PermissionMode, theme: ThemeFg): string {
-	const role = MODE_ROLES[mode] ?? "muted";
-	return " " + theme.bold(theme.inverse(theme.fg(role, ` ${mode.toUpperCase()} `)));
-}
-
-export function modePillWidth(mode: PermissionMode): number {
-	return mode.length + 3; // " " + " MODE "
 }
 
 // ── Path ───────────────────────────────────────────────────────────────

@@ -3,25 +3,12 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	buildPathString,
 	fmtTokens,
-	modePillWidth,
 	renderContextUsage,
 	renderModelInfo,
-	renderModePill,
 	renderPath,
-	type PermissionMode,
 } from "./renderers.js";
 
 export default function (pi: ExtensionAPI) {
-	let currentMode: PermissionMode = "safe";
-
-	// Optional inter-extension event. If no permission/mode extension is loaded,
-	// this simply remains at the safe default.
-	pi.events.on("mode:change", (data: unknown) => {
-		if (data === "safe" || data === "read-only" || data === "yolo") {
-			currentMode = data;
-		}
-	});
-
 	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
@@ -36,7 +23,7 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
-	// ── Line 1: Mode │ Path │ Context │ Model ──────────────────────────
+	// ── Line 1: Path │ Context │ Model ─────────────────────────────────
 
 	function renderLine1(
 		width: number,
@@ -46,10 +33,6 @@ export default function (pi: ExtensionAPI) {
 	): string {
 		const sep = theme.fg("dim", " │ ");
 		const sepW = 3;
-
-		// Mode pill
-		const pill = renderModePill(currentMode, theme);
-		const pillW = modePillWidth(currentMode);
 
 		// Path + branch
 		const pathRaw = buildPathString(ctx.cwd, gitBranch);
@@ -69,11 +52,11 @@ export default function (pi: ExtensionAPI) {
 
 		// Layout: compute path budget from remaining space
 		const rightBlockWidth = visibleWidth(ctxRaw) + sepW + modelInfo.rawWidth;
-		const pathBudget = width - pillW - sepW - rightBlockWidth - sepW;
+		const pathBudget = width - rightBlockWidth - sepW;
 		const pathDisplay = renderPath(pathRaw, pathBudget, theme);
 
 		// Assemble
-		const segments: string[] = [pill];
+		const segments: string[] = [];
 		if (pathDisplay) segments.push(pathDisplay);
 		segments.push(ctxColored);
 		segments.push(modelInfo.text);

@@ -26,5 +26,6 @@ TODO.md
 PLAN.md
 APPEND_SYSTEM.md
 agent/trust.json
+agent/models-store.json
 # advisor debug output
 agent/advisor/
