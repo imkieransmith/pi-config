@@ -17,7 +17,7 @@
  * Original - https://github.com/michalvavra/agents/blob/main/agents/pi/extensions/security.ts
  */
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { realpath } from "node:fs/promises";
+import { lstat, readlink, realpath } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { installSessionAllowReset, requestSessionConfirm } from "./shared/confirm-gate.js";
@@ -66,6 +66,9 @@ const hardBashRules: Rule[] = [
   { pattern: /(?:^|[^\w])(?:\/etc\/(?:passwd|shadow|sudoers|hosts|cron)|~\/\.(?:bashrc|zshrc|profile)|~\/\.config\/autostart)\b/i, reason: "system or profile persistence" },
   { pattern: /\b(?:nohup|disown)\b/i, reason: "detached background process" },
   { pattern: /\b(?:HISTFILE\s*=|HISTSIZE\s*=\s*0|unset\s+HISTFILE)\b/i, reason: "history suppression" },
+  { pattern: /(?:^|[;&|]\s*)(?:env(?:\s+-[A-Za-z]+)?|printenv|set|export\s+-p)\s*(?:$|[;&|])/im, reason: "whole environment disclosure" },
+  { pattern: /\bprintenv\s+(?:[A-Z0-9_]*(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)\b/i, reason: "secret environment variable disclosure" },
+  { pattern: /\b(?:echo|printf)\b[^\n;&|]*\$(?:\{)?(?:[A-Z0-9_]*(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)(?:\})?/i, reason: "secret environment variable disclosure" },
 ];
 
 // Data-loss confirms (rm, git reset --hard, git clean, find -delete, truncate)
@@ -89,13 +92,16 @@ const shellSecretPathRules: Rule[] = [
   { pattern: /(?:^|[\/\s"'`=:@])\.dev\.vars[^\s"'`]*/i, reason: "dev vars file" },
   { pattern: /(?:^|[\/\s"'`=:@])\.ssh(?:\/|$|\s)/i, reason: "SSH directory" },
   { pattern: /(?:^|[\/\s"'`=:@])\.gnupg(?:\/|$|\s)/i, reason: "GnuPG directory" },
+  { pattern: /(?:^|[\/\s"'`=:@])\.(?:aws|kube|docker)(?:\/|$|\s)/i, reason: "cloud or container credentials" },
+  { pattern: /(?:^|[\/\s"'`=:@])\.config\/(?:gh|gcloud)(?:\/|$|\s)/i, reason: "CLI credentials" },
+  { pattern: /(?:^|[\/\s"'`=:@])\.(?:npmrc|netrc|git-credentials)(?:$|[\/\s"'`<>|&;])/i, reason: "credential file" },
   { pattern: /(?:^|[\/\s"'`=:@])\.git(?:\/|$|\s)/i, reason: "git internals" },
   { pattern: /\b(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)\b/i, reason: "SSH private key" },
   { pattern: /[^\s"'`]+\.(?:pem|key)(?:$|[\s"'`<>|&;])/i, reason: "private key file" },
   { pattern: /\b(?:secret|secrets|credentials?|tokens?|api[_-]?keys?)\b/i, reason: "secret material" },
 ];
 
-const sensitiveReadCommands = /\b(?:cat|sed|awk|grep|rg|head|tail|less|more|nl|strings|xxd|od|cp|mv|install|tee|sponge|tar|zip|gzip|base64|openssl|curl|rsync|scp|python3?|node|ruby|perl|php)\b/i;
+const sensitiveReadCommands = /\b(?:cat|sed|awk|grep|rg|find|fd|ls|tree|head|tail|less|more|nl|strings|xxd|od|cp|mv|install|tee|sponge|tar|zip|gzip|base64|openssl|curl|rsync|scp|python3?|node|ruby|perl|php)\b/i;
 const shellWriteOperators = /(?:^|[^<>])>>?\s*|(?:\|\s*)?(?:tee|sponge|cp|mv|install)\b/i;
 const shellWordPattern = /"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+/g;
 
@@ -111,17 +117,43 @@ function expandUserPath(filePath: string): string {
   return filePath;
 }
 
-/** Canonical paths make traversal and symlink tricks much harder to hide. */
-async function resolveToolPath(rawPath: string, ctx: ExtensionContext): Promise<string> {
-  const withoutAt = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
-  const expanded = expandUserPath(withoutAt.trim() || ".");
-  const resolved = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(ctx.cwd, expanded);
+/**
+ * Canonicalize existing paths and the nearest existing parent of new paths.
+ * This prevents a missing write target below a symlinked directory from looking
+ * project-local while actually resolving somewhere else. Dangling symlinks are
+ * followed explicitly because realpath() cannot resolve their missing target.
+ */
+async function canonicalizeToolPath(resolved: string, symlinkDepth = 0): Promise<string> {
+  if (symlinkDepth > 40) throw new Error(`too many symbolic links while resolving ${resolved}`);
 
   try {
     return await realpath(resolved);
   } catch {
-    return resolved;
+    let isSymbolicLink = false;
+    try {
+      isSymbolicLink = (await lstat(resolved)).isSymbolicLink();
+    } catch {
+      // The target does not exist (or cannot be inspected); canonicalize its parent below.
+    }
+
+    if (isSymbolicLink) {
+      const target = await readlink(resolved);
+      const targetPath = path.isAbsolute(target) ? target : path.resolve(path.dirname(resolved), target);
+      return canonicalizeToolPath(targetPath, symlinkDepth + 1);
+    }
+
+    const parent = path.dirname(resolved);
+    if (parent === resolved) return resolved;
+    const canonicalParent = await canonicalizeToolPath(parent, symlinkDepth);
+    return path.join(canonicalParent, path.basename(resolved));
   }
+}
+
+async function resolveToolPath(rawPath: string, ctx: ExtensionContext): Promise<string> {
+  const withoutAt = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
+  const expanded = expandUserPath(withoutAt.trim() || ".");
+  const resolved = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(ctx.cwd, expanded);
+  return canonicalizeToolPath(resolved);
 }
 
 /** Root-aware containment check; prefix checks are unsafe for sibling paths. */
@@ -147,12 +179,18 @@ function includesSensitiveSegment(absPath: string): string | undefined {
 
   if (isEnvFile(base)) return "environment file";
   if (base === ".dev.vars" || base.startsWith(".dev.vars.")) return "dev vars file";
+  if (/^\.(?:npmrc|netrc|git-credentials)$/i.test(base)) return "credential file";
   if (/\.(?:pem|key)$/i.test(base)) return "private key file";
   if (/^(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)$/i.test(base)) return "SSH private key";
 
-  for (const segment of segments) {
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index];
     if (segment === ".ssh") return "SSH directory";
     if (segment === ".gnupg") return "GnuPG directory";
+    if (segment === ".aws") return "AWS credentials";
+    if (segment === ".kube") return "Kubernetes credentials";
+    if (segment === ".docker") return "Docker credentials";
+    if (segment === ".config" && /^(?:gh|gcloud)$/i.test(segments[index + 1] ?? "")) return "CLI credentials";
     if (segment === ".git") return "git directory";
     if (/(?:secret|credentials?|tokens?|api[-_]?keys?)/i.test(segment)) {
       return "secret material";
@@ -254,7 +292,7 @@ function classifyPiPath(absPath: string, home: string): PiPathTier {
   return "private";
 }
 
-/** TODO.md files are AI scratchpads and should never be gated. */
+/** TODO.md files are AI scratchpads; path policy still applies before any Bash rewrite exemption. */
 function isTodoPlanningNote(absPath: string): boolean {
   return path.basename(absPath).toLowerCase() === "todo.md";
 }
@@ -327,12 +365,14 @@ function classifyBashPiReferences(command: string): Decision {
   return ALLOW;
 }
 
-function stripHeredocBodies(command: string): string {
+function stripLiteralHeredocBodies(command: string): string {
   const lines = command.split(/\r?\n/);
   const output: string[] = [];
   const pendingDelimiters: Array<{ word: string; allowLeadingTabs: boolean }> = [];
 
-  const heredocPattern = /<<-?\s*(?:"([^"]+)"|'([^']+)'|\\?([^\s;&|()<>]+))/g;
+  // Only quoted or backslash-escaped delimiters are literal. Unquoted heredoc
+  // bodies remain visible to policy because shell expansions execute there.
+  const heredocPattern = /<<-?\s*(?:"([^"]+)"|'([^']+)'|\\([^\s;&|()<>]+))/g;
 
   for (const line of lines) {
     const pending = pendingDelimiters[0];
@@ -341,8 +381,8 @@ function stripHeredocBodies(command: string): string {
       if (comparable === pending.word) {
         output.push(line);
         pendingDelimiters.shift();
-      } else if (output[output.length - 1] !== "[heredoc body omitted]") {
-        output.push("[heredoc body omitted]");
+      } else if (output[output.length - 1] !== "[literal heredoc body omitted]") {
+        output.push("[literal heredoc body omitted]");
       }
       continue;
     }
@@ -363,10 +403,6 @@ function stripHeredocBodies(command: string): string {
 function shellRewriteTargetsOnlyTodo(command: string): boolean {
   const refs = shellFileReferences(command);
   return refs.some(isTodoPlanningNote) && refs.every(isTodoPlanningNote);
-}
-
-function shellHeredocWritesOnlyTodo(command: string): boolean {
-  return /<<-?\s*/.test(command) && shellWriteOperators.test(command) && shellRewriteTargetsOnlyTodo(command);
 }
 
 /** These files can turn later ordinary commands into arbitrary code execution. */
@@ -395,7 +431,9 @@ function sensitiveFilePattern(value: string): string | undefined {
 
   if (/(^|\/)\.env(?!\.example(?:$|\/))[^/]*/i.test(normalized)) return "environment file";
   if (/(^|\/)\.dev\.vars[^/]*/i.test(normalized)) return "dev vars file";
-  if (/(^|\/)\.(?:ssh|gnupg|git)(?:$|\/)/i.test(normalized)) return "sensitive directory";
+  if (/(^|\/)\.(?:ssh|gnupg|aws|kube|docker|git)(?:$|\/)/i.test(normalized)) return "sensitive directory";
+  if (/(^|\/)\.config\/(?:gh|gcloud)(?:$|\/)/i.test(normalized)) return "CLI credentials";
+  if (/(^|\/)\.(?:npmrc|netrc|git-credentials)(?:$|\/)/i.test(normalized)) return "credential file";
   if (/(^|\/)\.pi\/agent\/(?:sessions|history|cache|logs|state|tmp|evidence|advisor)(?:$|\/)/i.test(normalized)) return "Pi private runtime state";
   if (/\.(?:pem|key)(?:$|[^\w])/i.test(normalized)) return "private key file";
   if (/\b(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)\b/i.test(normalized)) return "SSH private key";
@@ -413,10 +451,6 @@ async function classifyPath(
 ): Promise<Decision> {
   const cwd = await resolveToolPath(".", ctx);
   const home = os.homedir();
-
-  if (isTodoPlanningNote(absPath)) {
-    return ALLOW;
-  }
 
   if (isInside(path.join(home, ".ssh"), absPath)) {
     return block(`${intent} of SSH secrets`, rawPath);
@@ -462,6 +496,17 @@ async function classifyPath(
     return block(`${intent} of Pi project extension`, rawPath);
   }
 
+  if ((intent === "read" || intent === "discover") && !isInside(cwd, absPath)) {
+    const action = intent === "read" ? "read outside project" : "discover outside project";
+    return {
+      action: "confirm",
+      reason: action,
+      title: `Security check: ${action}?`,
+      detail: rawPath,
+      allowKey: `security:${action}`,
+    };
+  }
+
   if (intent === "mutate" && !isInside(cwd, absPath)) {
     return block("file mutation outside project", rawPath);
   }
@@ -505,29 +550,25 @@ function confirm(reason: string, detail: string): Decision {
 /** Bash is not parseable with regex, so this is conservative damage reduction. */
 // Exported for the de-dupe test harness; pi only invokes the default export.
 export function classifyBash(command: string): Decision {
-  const commandWithoutHeredocBodies = stripHeredocBodies(command);
-  const todoOnlyHeredocWrite = shellHeredocWritesOnlyTodo(commandWithoutHeredocBodies);
-  const commandForHardRules = todoOnlyHeredocWrite ? commandWithoutHeredocBodies : command;
+  const commandForRules = stripLiteralHeredocBodies(command);
 
   for (const rule of hardBashRules) {
-    if (rule.pattern.test(commandForHardRules)) return block(rule.reason, commandForHardRules);
+    if (rule.pattern.test(commandForRules)) return block(rule.reason, commandForRules);
   }
 
-  if (todoOnlyHeredocWrite) return ALLOW;
-
-  const piDecision = classifyBashPiReferences(command);
+  const piDecision = classifyBashPiReferences(commandForRules);
   if (piDecision.action !== "allow") return piDecision;
 
   for (const rule of shellSecretPathRules) {
-    if (rule.pattern.test(command) && (sensitiveReadCommands.test(command) || shellWriteOperators.test(command))) {
-      return block(`bash touches protected path: ${rule.reason}`, command);
+    if (rule.pattern.test(commandForRules) && (sensitiveReadCommands.test(commandForRules) || shellWriteOperators.test(commandForRules))) {
+      return block(`bash touches protected path: ${rule.reason}`, commandForRules);
     }
   }
 
   for (const rule of confirmBashRules) {
-    if (rule.pattern.test(command)) {
-      if (rule.reason === "in-place file rewrite" && shellRewriteTargetsOnlyTodo(command)) continue;
-      return confirm(rule.reason, command);
+    if (rule.pattern.test(commandForRules)) {
+      if (rule.reason === "in-place file rewrite" && shellRewriteTargetsOnlyTodo(commandForRules)) continue;
+      return confirm(rule.reason, commandForRules);
     }
   }
 
@@ -581,10 +622,11 @@ function formatSecurityStatus(): string {
     "Security extension",
     "status: active",
     "protects:",
-    "- blocks high-risk bash patterns such as privilege escalation, destructive disk commands, remote script execution, and secret exfiltration patterns",
+    "- blocks high-risk bash patterns such as privilege escalation, destructive disk commands, remote script execution, environment disclosure, and secret exfiltration patterns",
     "- confirms package manager, container, network fetch, in-place rewrite, and project script commands when an interactive UI is available (with an 'allow for this session' option)",
     "- defers file/git data-loss prompts (rm, git reset --hard, git clean, find -delete, truncate) to the confirm-destructive extension to avoid double prompts",
-    "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, private keys, and secret-like filenames",
+    "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, cloud/CLI credential directories, credential dotfiles, private keys, and secret-like filenames",
+    "- asks before built-in reads or discovery outside the current project, with allow-once and allow-for-session choices",
     "- allows normal Pi repo docs and authoring reads, while blocking private Pi runtime state such as sessions, logs, caches, state, and debug payloads",
     "- asks for confirmation before modifying Pi authoring surfaces such as personal extensions and skills",
     "- blocks file mutation outside the current project and inside node_modules",
