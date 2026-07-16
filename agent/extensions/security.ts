@@ -205,6 +205,15 @@ function includesSensitiveProjectExtension(absPath: string, cwd: string): boolea
   return isInside(path.join(cwd, ".pi", "extensions"), absPath);
 }
 
+const PI_CLIPBOARD_IMAGE_NAME = /^pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpe?g|gif|webp)$/i;
+
+/** Pi writes pasted images under os.tmpdir() with a random UUID filename. */
+async function isPiClipboardImage(absPath: string): Promise<boolean> {
+  if (!PI_CLIPBOARD_IMAGE_NAME.test(path.basename(absPath))) return false;
+  const tempRoot = await canonicalizeToolPath(os.tmpdir());
+  return isInside(tempRoot, absPath);
+}
+
 type PiPathTier = "public" | "authoring" | "private" | "config" | "outside";
 
 /** Root-level planning notes are intentionally writable across projects. */
@@ -496,6 +505,10 @@ async function classifyPath(
     return block(`${intent} of Pi project extension`, rawPath);
   }
 
+  // Pasted images are explicit user input. Allow only Pi's exact UUID-based
+  // filenames, only after canonicalization, and only for the read tool.
+  if (intent === "read" && await isPiClipboardImage(absPath)) return ALLOW;
+
   if ((intent === "read" || intent === "discover") && !isInside(cwd, absPath)) {
     const action = intent === "read" ? "read outside project" : "discover outside project";
     return {
@@ -627,6 +640,7 @@ function formatSecurityStatus(): string {
     "- defers file/git data-loss prompts (rm, git reset --hard, git clean, find -delete, truncate) to the confirm-destructive extension to avoid double prompts",
     "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, cloud/CLI credential directories, credential dotfiles, private keys, and secret-like filenames",
     "- asks before built-in reads or discovery outside the current project, with allow-once and allow-for-session choices",
+    "- allows read-only access to Pi-generated clipboard images in the canonical system temporary directory",
     "- allows normal Pi repo docs and authoring reads, while blocking private Pi runtime state such as sessions, logs, caches, state, and debug payloads",
     "- asks for confirmation before modifying Pi authoring surfaces such as personal extensions and skills",
     "- blocks file mutation outside the current project and inside node_modules",
