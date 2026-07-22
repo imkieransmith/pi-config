@@ -2,9 +2,10 @@
  * Allow the model to store and fetch evidence snippets to use as citations in answers.
  *
  * Agent tools:
- * EvidenceAdd - store a snippet with source + one-line note.
+ * EvidenceAdd - validate and store an exact snippet with source + one-line note.
  * EvidenceGet - retrieve a single entry by ID.
- * EvidenceList - list all entries (ID, source, note).
+ * EvidenceVerify - retrieve full snippets for every final citation.
+ * EvidenceList - discover entries in bounded newest-first cursor pages.
  *
  * Original - https://github.com/itayinbarr/little-coder/tree/main/.pi/extensions/evidence
  */
@@ -16,71 +17,49 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { randomBytes } from "node:crypto";
+import {
+  DEFAULT_LIST_LIMIT,
+  MAX_LIST_LIMIT,
+  MAX_VERIFY_IDS,
+  NOTE_CAP,
+  SNIPPET_CAP,
+  SOURCE_CAP,
+  STATE_CUSTOM_TYPE,
+  STATE_VERSION,
+  findEvidenceDuplicate,
+  formatEvidenceEntry,
+  formatEvidenceLine,
+  hydrateEvidence,
+  listEvidencePage,
+  normalizeEvidenceId,
+  selectEvidenceForVerification,
+  validateNewEvidence,
+  type EvidencePage,
+  type EvidenceEntry,
+  type EvidenceStateEvent,
+} from "./evidence/core.ts";
 
-const SNIPPET_CAP = 1024;
 const COMMAND_CUSTOM_TYPE = "evidence-proof";
-const STATE_CUSTOM_TYPE = "evidence-state";
-const STATE_VERSION = 1;
+const COMMAND_ENTRY_VERSION = 1;
 
-interface EvidenceEntry {
-  id: string;
-  source: string;
-  note: string;
-  snippet: string;
+type EvidenceDisplayKind = "proof" | "list" | "usage" | "error";
+
+interface EvidenceDisplayEntry {
+  version: 1;
+  kind: EvidenceDisplayKind;
+  content: string;
   createdAt: number;
 }
-
-type EvidenceStateEvent = {
-  version: 1;
-  type: "add";
-  entry: EvidenceEntry;
-};
 
 type EvidenceContext = ExtensionCommandContext | ExtensionContext;
 
 // Keyed by Pi session ID so concurrent sessions don't bleed into each other.
 const stores = new Map<string, EvidenceEntry[]>();
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isEvidenceEntry(value: unknown): value is EvidenceEntry {
-  return isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.source === "string" &&
-    typeof value.note === "string" &&
-    typeof value.snippet === "string" &&
-    typeof value.createdAt === "number";
-}
-
-function isEvidenceStateEntry(entry: SessionEntry): boolean {
-  return entry.type === "custom" && entry.customType === STATE_CUSTOM_TYPE;
-}
-
-function getStateEvent(entry: SessionEntry): EvidenceStateEvent | undefined {
-  if (!isEvidenceStateEntry(entry)) return undefined;
-  const data = entry.data;
-  if (!isRecord(data) || data.version !== STATE_VERSION || data.type !== "add" || !isEvidenceEntry(data.entry)) {
-    return undefined;
-  }
-
-  return data as EvidenceStateEvent;
-}
-
 function hydrateStore(entries: SessionEntry[]): EvidenceEntry[] {
-  const hydrated: EvidenceEntry[] = [];
-  const seen = new Set<string>();
-
-  for (const entry of entries) {
-    const event = getStateEvent(entry);
-    if (!event || seen.has(event.entry.id)) continue;
-    hydrated.push(event.entry);
-    seen.add(event.entry.id);
-  }
-
-  return hydrated;
+  return hydrateEvidence(entries);
 }
 
 function rebuildStore(ctx: EvidenceContext): EvidenceEntry[] {
@@ -114,28 +93,15 @@ function appendEvidenceEntry(pi: ExtensionAPI, entry: EvidenceEntry): void {
   } satisfies EvidenceStateEvent);
 }
 
-function formatEvidenceLine(entry: EvidenceEntry): string {
-  return `${entry.id}\t${entry.source}\t${entry.note}`;
-}
+function formatEvidencePage(page: EvidencePage): string {
+  if (page.total === 0) return "(no evidence stored yet)";
 
-function formatEvidenceEntry(entry: EvidenceEntry): string {
-  return `${formatEvidenceLine(entry)}\nsnippet:\n${entry.snippet}`;
-}
-
-function formatEvidenceList(store: EvidenceEntry[]): string {
-  if (store.length === 0) return "(no evidence stored yet)";
-  return store.map(formatEvidenceLine).join("\n");
-}
-
-function normalizeEvidenceId(raw: string): string {
-  const trimmed = raw.trim();
-  const bracketed = trimmed.match(/^\[([^\]]+)\]$/);
-  if (bracketed) return bracketed[1].trim();
-
-  const parenthesized = trimmed.match(/^\(([^)]+)\)$/);
-  if (parenthesized) return parenthesized[1].trim();
-
-  return trimmed;
+  const lines = page.entries.map(formatEvidenceLine);
+  lines.push("", `showing ${page.entries.length} of ${page.total} entries (newest first)`);
+  if (page.nextBeforeId) {
+    lines.push(`nextBeforeId: ${page.nextBeforeId}`);
+  }
+  return lines.join("\n");
 }
 
 function generateEvidenceId(store: EvidenceEntry[]): string {
@@ -146,11 +112,6 @@ function generateEvidenceId(store: EvidenceEntry[]): string {
 
   throw new Error("could not generate a unique evidence id");
 }
-
-const BRIDGE = (n: number): string =>
-  `[Preserved evidence from earlier in the conversation follows.] ` +
-  `${n} evidence entr${n === 1 ? "y remains" : "ies remain"} available via ` +
-  `EvidenceList, EvidenceGet, /proof, and /evidence.`;
 
 export default function (pi: ExtensionAPI) {
   let activeSessionId: string | undefined;
@@ -183,56 +144,97 @@ export default function (pi: ExtensionAPI) {
         "info",
       );
     }
-
-    // sendUserMessage may not exist in all Pi versions; degrade gracefully.
-    pi.sendUserMessage?.(BRIDGE(store.length), { deliverAs: "followUp" });
   });
 
   // ── Commands ──────────────────────────────────────────────────────────────
 
-  const showEvidenceMessage = (content: string) => {
-    pi.sendMessage({
-      customType: COMMAND_CUSTOM_TYPE,
+  pi.registerEntryRenderer<EvidenceDisplayEntry>(COMMAND_CUSTOM_TYPE, (entry, { expanded }, theme) => {
+    const data = entry.data;
+    if (!data || data.version !== COMMAND_ENTRY_VERSION || typeof data.content !== "string") {
+      return new Text(theme.fg("error", "[evidence] invalid display entry"), 0, 0);
+    }
+
+    const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+    const title = data.kind === "error"
+      ? theme.fg("error", "[evidence]")
+      : theme.fg("accent", "[evidence]");
+    let content = `${title}\n${theme.fg(data.kind === "error" ? "error" : "muted", data.content)}`;
+    if (expanded) content += `\n${theme.fg("dim", new Date(data.createdAt).toLocaleString())}`;
+    box.addChild(new Text(content, 0, 0));
+    return box;
+  });
+
+  const showEvidenceEntry = (content: string, kind: EvidenceDisplayKind) => {
+    pi.appendEntry(COMMAND_CUSTOM_TYPE, {
+      version: COMMAND_ENTRY_VERSION,
+      kind,
       content,
-      display: true,
-      details: {},
-    }, { triggerTurn: false });
+      createdAt: Date.now(),
+    } satisfies EvidenceDisplayEntry);
   };
 
   const evidenceCommand = {
-    description: "Show a saved evidence entry by ID.",
+    description: "Show TUI-only evidence proof by ID or browse paginated evidence.",
     getArgumentCompletions: (prefix: string) => {
-      const normalizedPrefix = normalizeEvidenceId(prefix ?? "");
-      const items = getSessionStore(activeSessionId ?? "")
+      const rawPrefix = (prefix ?? "").trim();
+      const pageMatch = rawPrefix.match(/^page\s+(.*)$/i);
+      const normalizedPrefix = normalizeEvidenceId(pageMatch?.[1] ?? rawPrefix);
+      const entries = [...getSessionStore(activeSessionId ?? "")].reverse();
+      const items = entries
         .map((entry) => ({
-          value: entry.id,
+          value: pageMatch ? `page ${entry.id}` : entry.id,
           label: entry.id,
-          description: entry.note,
+          description: pageMatch ? `Show entries older than: ${entry.note}` : entry.note,
         }))
-        .filter((item) => item.value.startsWith(normalizedPrefix));
+        .filter((item) => normalizeEvidenceId(item.label).startsWith(normalizedPrefix));
 
+      if (!rawPrefix || "page".startsWith(rawPrefix.toLowerCase())) {
+        items.unshift({ value: "page ", label: "page", description: "Show an older evidence page by cursor." });
+      }
       return items.length > 0 ? items : null;
     },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
       const store = bucket(ctx);
-      const id = normalizeEvidenceId(args ?? "");
+      const raw = (args ?? "").trim();
 
-      if (!id) {
-        showEvidenceMessage(
-          `Usage: /proof <evidence_id> or /evidence <evidence_id>\n\n${formatEvidenceList(store)}`,
+      if (!raw) {
+        showEvidenceEntry(
+          `Usage: /proof <evidence_id> or /evidence page <before_id> [limit]\n\n${formatEvidencePage(listEvidencePage(store))}`,
+          "list",
         );
         return;
       }
 
+      const pageMatch = raw.match(/^page\s+(\S+)(?:\s+(\S+))?$/i);
+      if (pageMatch) {
+        const limit = pageMatch[2] === undefined ? undefined : Number(pageMatch[2]);
+        try {
+          showEvidenceEntry(formatEvidencePage(listEvidencePage(store, {
+            beforeId: pageMatch[1],
+            limit,
+          })), "list");
+        } catch (error) {
+          showEvidenceEntry(error instanceof Error ? error.message : String(error), "error");
+        }
+        return;
+      }
+
+      if (/^page(?:\s|$)/i.test(raw)) {
+        showEvidenceEntry("Usage: /evidence page <before_id> [limit]", "usage");
+        return;
+      }
+
+      const id = normalizeEvidenceId(raw);
       const entry = store.find((item) => item.id === id);
       if (!entry) {
-        showEvidenceMessage(
-          `evidence id '${id}' not found\n\nRun /evidence with no arguments to list stored evidence IDs.`,
+        showEvidenceEntry(
+          `evidence id '${id}' not found\n\nRun /evidence with no arguments to list recent evidence IDs.`,
+          "error",
         );
         return;
       }
 
-      showEvidenceMessage(formatEvidenceEntry(entry));
+      showEvidenceEntry(formatEvidenceEntry(entry), "proof");
     },
   };
 
@@ -245,38 +247,50 @@ export default function (pi: ExtensionAPI) {
     name: "EvidenceAdd",
     label: "EvidenceAdd",
     description:
-      "Save a short evidence snippet with its source and a one-line note. " +
-      "Use for any fact you will cite in your final answer. Snippet is capped at 1 KB.",
+      "Save an exact evidence snippet with its source and a one-line claim note. " +
+      `Snippets above ${SNIPPET_CAP} characters are rejected rather than altered.`,
     parameters: Type.Object({
-      source: Type.String({ description: "URL or identifier of the origin" }),
-      note: Type.String({ description: "One-line summary for later recall" }),
-      snippet: Type.String({ description: "The exact citable span (≤1 KB)" }),
+      source: Type.String({
+        description: "Single-line URL or source identifier",
+        minLength: 1,
+        maxLength: SOURCE_CAP,
+        pattern: "^[^\\r\\n\\t]+$",
+      }),
+      note: Type.String({
+        description: "Single-line claim-shaped summary",
+        minLength: 1,
+        maxLength: NOTE_CAP,
+        pattern: "^[^\\r\\n\\t]+$",
+      }),
+      snippet: Type.String({
+        description: `Exact citable span (at most ${SNIPPET_CAP} characters)`,
+        minLength: 1,
+        maxLength: SNIPPET_CAP,
+      }),
     }),
-    async execute(_toolCallId, { source, note, snippet }, _signal, _onUpdate, ctx) {
-      const src = (source ?? "").trim();
-      const n = (note ?? "").trim();
-      let sn = (snippet ?? "").trim();
-
-      if (!src) throw new Error("source is required (URL or identifier)");
-      if (!n) throw new Error("note is required (one-line summary)");
-      if (!sn) throw new Error("snippet is required");
-
-      if (sn.length > SNIPPET_CAP) {
-        sn = sn.slice(0, SNIPPET_CAP) + `\n[... truncated at ${SNIPPET_CAP} chars ...]`;
+    async execute(_toolCallId, input, _signal, _onUpdate, ctx) {
+      const validated = validateNewEvidence(input);
+      const store = bucket(ctx);
+      const duplicate = findEvidenceDuplicate(store, validated.source, validated.snippet);
+      if (duplicate) {
+        return {
+          content: [{ type: "text", text: `existing ${duplicate.id}: ${duplicate.note}` }],
+          details: { id: duplicate.id, duplicate: true },
+        };
       }
 
-      const store = bucket(ctx);
       const entry: EvidenceEntry = {
         id: generateEvidenceId(store),
-        source: src,
-        note: n,
-        snippet: sn,
+        ...validated,
         createdAt: Date.now(),
       };
       store.push(entry);
       appendEvidenceEntry(pi, entry);
 
-      return { content: [{ type: "text", text: `stored ${entry.id}: ${n}` }], details: {} };
+      return {
+        content: [{ type: "text", text: `stored ${entry.id}: ${entry.note}` }],
+        details: { id: entry.id, duplicate: false },
+      };
     },
   });
 
@@ -288,7 +302,7 @@ export default function (pi: ExtensionAPI) {
       id: Type.String({ description: "Evidence ID returned by EvidenceAdd or EvidenceList" }),
     }),
     async execute(_toolCallId, { id }, _signal, _onUpdate, ctx) {
-      const eid = (id ?? "").trim();
+      const eid = normalizeEvidenceId(id);
       if (!eid) throw new Error("id is required");
 
       const entry = bucket(ctx).find((x) => x.id === eid);
@@ -305,13 +319,60 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "EvidenceVerify",
+    label: "EvidenceVerify",
+    description:
+      "Retrieve the full source, note, and exact snippet for every evidence ID cited in a final answer. " +
+      "Fails if any ID is missing so claim support can be checked before responding.",
+    parameters: Type.Object({
+      ids: Type.Array(Type.String({
+        description: "Evidence ID, optionally wrapped in brackets or parentheses",
+        minLength: 1,
+      }), {
+        description: `One to ${MAX_VERIFY_IDS} cited evidence IDs`,
+        minItems: 1,
+        maxItems: MAX_VERIFY_IDS,
+      }),
+    }),
+    async execute(_toolCallId, { ids }, _signal, _onUpdate, ctx) {
+      const entries = selectEvidenceForVerification(bucket(ctx), ids);
+      return {
+        content: [{
+          type: "text",
+          text: entries.map(formatEvidenceEntry).join("\n\n---\n\n"),
+        }],
+        details: { ids: entries.map((entry) => entry.id), count: entries.length },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "EvidenceList",
     label: "EvidenceList",
-    description: "List all evidence entries in this session: ID, source, one-line note.",
-    parameters: Type.Object({}),
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const b = bucket(ctx);
-      return { content: [{ type: "text", text: formatEvidenceList(b) }], details: {} };
+    description:
+      `List evidence newest-first in cursor pages (default ${DEFAULT_LIST_LIMIT}, maximum ${MAX_LIST_LIMIT}). ` +
+      "Use nextBeforeId as beforeId to retrieve the next older page.",
+    parameters: Type.Object({
+      limit: Type.Optional(Type.Integer({
+        description: `Page size from 1 to ${MAX_LIST_LIMIT}`,
+        minimum: 1,
+        maximum: MAX_LIST_LIMIT,
+      })),
+      beforeId: Type.Optional(Type.String({
+        description: "Exclusive cursor from a previous page's nextBeforeId",
+        minLength: 1,
+      })),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const page = listEvidencePage(bucket(ctx), params);
+      return {
+        content: [{ type: "text", text: formatEvidencePage(page) }],
+        details: {
+          total: page.total,
+          count: page.entries.length,
+          nextBeforeId: page.nextBeforeId,
+        },
+      };
     },
   });
 }

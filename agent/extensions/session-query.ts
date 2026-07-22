@@ -112,6 +112,14 @@ function formatEvidenceState(entry: SessionEntry, data: Record<string, unknown>)
 	].join("\n");
 }
 
+function formatEvidenceProofEntry(entry: SessionEntry, data: Record<string, unknown>): string {
+	return [
+		`${entryPrefix(entry)} Evidence TUI ${String(data.kind ?? "output")}`,
+		`createdAt: ${String(data.createdAt ?? "")}`,
+		truncate(String(data.content ?? ""), TEXT_CAP),
+	].join("\n");
+}
+
 function formatContextSnapshotState(entry: SessionEntry, data: Record<string, unknown>): string {
 	const persistedType = String(data.type ?? "event");
 	const publicTypes: Record<string, string> = {
@@ -147,6 +155,7 @@ function formatCustomEntry(entry: SessionEntry): string {
 	const data = isRecord(entry) ? entry.data : undefined;
 
 	if (customType === "evidence-state" && isRecord(data)) return formatEvidenceState(entry, data);
+	if (customType === "evidence-proof" && isRecord(data)) return formatEvidenceProofEntry(entry, data);
 	if (customType === "context-snapshot-state" && isRecord(data)) return formatContextSnapshotState(entry, data);
 
 	return `${entryPrefix(entry)} custom ${customType}\n${stringify(data)}`;

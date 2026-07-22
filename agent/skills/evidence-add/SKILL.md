@@ -40,14 +40,17 @@ If a sentence describes something the user can verify by looking at the material
 
 1. Retrieve fact (search / fetch / read file).
 2. **Immediately** call EvidenceAdd, before your next tool call, before composing prose.
-3. Before sending your final answer, call EvidenceList. For every claim in your draft that fires the trigger above, confirm a covering entry exists. If missing, retrieve and store, or remove the claim.
-4. Cite inline with the returned ID: *"introduced in 1936 (e3a1f2)"*.
+3. Use EvidenceList only when you need to rediscover candidate IDs; it is an index and does not prove that a snippet supports a claim.
+4. Before sending your final answer, collect every evidence ID you intend to cite and call EvidenceVerify with those IDs (in batches of at most 20).
+5. Compare each final claim against the exact snippet returned by EvidenceVerify. If the snippet does not directly support the claim, retrieve better evidence, narrow or qualify the claim, or remove it.
+6. Cite inline with the verified ID: *"introduced in 1936 (e3a1f2)"*.
 
 ## Rules
 
 - **Verbatim.** Snippet copied exactly from source. No paraphrasing or summarising.
 - **Smallest span.** Just the sentence(s) that support the claim.
 - **One entry per claim.** Three useful facts = three entries.
+- **Verify exact support.** EvidenceList confirms only that an ID exists; EvidenceVerify is required to inspect the supporting snippet before the final answer.
 - **Claim-shaped note.** Write the note as an assertion ("X does Y"), not a topic label ("About X").
 
 ## Source format

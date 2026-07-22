@@ -17,7 +17,7 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Confirm Destructive** (`confirm-destructive.ts`) — Confirm destructive tool calls and bash commands before they run.
 - **Context Snapshot** (`context.ts`) — Append-only durable work captures with a bounded recent-summary appendix added after Pi compacts.
 - **Custom Footer** (`custom-footer`) — Compact powerline-style footer with path, context, and model info.
-- **Evidence Store** (`evidence.ts`) — Durable citable evidence snippets with list/get/add tools.
+- **Evidence Store** (`evidence.ts`) — Validated durable snippets with deduplication, paginated discovery, exact final-citation verification, and TUI-only proof.
 - **Meep** (`meep.ts`) — Says meep when the model is done working.
 - **Plan Command** (`plan.ts`) — Deterministic `/plan` handoff that manages ContextSnapshot captures.
 - **Redact Sensitive Data** (`redact.ts`) — Redact secrets from tool output.

@@ -54,7 +54,7 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
   },
   "evidence.ts": {
     title: "Evidence Store",
-    description: "Durable citable evidence snippets with list/get/add tools.",
+    description: "Validated durable snippets with paginated discovery, exact verification, and TUI-only proof.",
   },
   "meep.ts": {
     title: "Meep",
