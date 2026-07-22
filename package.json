@@ -5,6 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:context": "node --test agent/extensions/context/appendix.test.ts",
     "test:evidence": "node --test agent/extensions/evidence/core.test.ts"
   },
   "pi": {

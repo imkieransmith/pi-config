@@ -24,13 +24,15 @@ import { compact as runCompaction } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { randomBytes } from "node:crypto";
+import {
+  snapshotAppendix,
+  stripTerminalSnapshotAppendix,
+} from "./appendix.ts";
 
 const STATE_CUSTOM_TYPE = "context-snapshot-state";
 const MESSAGE_CUSTOM_TYPE = "context-snapshot";
 const STATE_VERSION = 1;
 const SUMMARY_CAP = 5000;
-const SNAPSHOT_APPENDIX_TARGET = 15000;
-const MIN_APPENDIX_SUMMARIES = 3;
 const TOOL_OUTPUT_CAP = 6000;
 
 type SnapshotAction = "start" | "finish" | "discard" | "status" | "list";
@@ -410,43 +412,6 @@ function formatFinishedSummary(summary: DurableSummary): string {
   );
 }
 
-function formatAppendixSummary(summary: DurableSummary): string {
-  return [
-    `### ${summary.id}: ${summary.label}`,
-    summary.hadChanges ? "(finished after changes were observed)" : undefined,
-    summary.summary,
-  ].filter(Boolean).join("\n");
-}
-
-function renderSnapshotAppendix(summaries: DurableSummary[]): string {
-  return [
-    "## Recent ContextSnapshot Summaries",
-    "These recent durable summaries retain high-detail working context across compaction.",
-    "",
-    ...summaries.map(formatAppendixSummary),
-  ].join("\n\n");
-}
-
-function snapshotAppendix(state: SessionState): string | undefined {
-  if (state.summaries.length === 0) return undefined;
-
-  let selectedNewestFirst: DurableSummary[] = [];
-  for (let index = state.summaries.length - 1; index >= 0; index -= 1) {
-    const candidateNewestFirst = [...selectedNewestFirst, state.summaries[index]];
-    const candidate = renderSnapshotAppendix([...candidateNewestFirst].reverse());
-    if (
-      selectedNewestFirst.length < MIN_APPENDIX_SUMMARIES ||
-      candidate.length <= SNAPSHOT_APPENDIX_TARGET
-    ) {
-      selectedNewestFirst = candidateNewestFirst;
-      continue;
-    }
-    break;
-  }
-
-  return renderSnapshotAppendix([...selectedNewestFirst].reverse());
-}
-
 function showCommandMessage(pi: ExtensionAPI, content: string): void {
   pi.sendMessage({
     customType: MESSAGE_CUSTOM_TYPE,
@@ -561,8 +526,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
-    const appendix = snapshotAppendix(stateFor(ctx));
-    if (!appendix) return undefined;
+    const appendix = snapshotAppendix(stateFor(ctx).summaries);
+    const previousSummary = stripTerminalSnapshotAppendix(event.preparation.previousSummary);
+    const cleanedPreviousAppendix = previousSummary !== event.preparation.previousSummary;
+    if (!appendix && !cleanedPreviousAppendix) return undefined;
 
     if (!ctx.model) throw new Error("No model available for context snapshot compaction");
 
@@ -573,7 +540,10 @@ export default function (pi: ExtensionAPI) {
     }
 
     const compaction = await runCompaction(
-      event.preparation,
+      {
+        ...event.preparation,
+        previousSummary,
+      },
       ctx.model,
       auth.apiKey,
       auth.headers,
@@ -584,7 +554,9 @@ export default function (pi: ExtensionAPI) {
     return {
       compaction: {
         ...compaction,
-        summary: `${compaction.summary.trimEnd()}\n\n${appendix}`,
+        summary: appendix
+          ? `${compaction.summary.trimEnd()}\n\n${appendix}`
+          : compaction.summary,
       },
     };
   });

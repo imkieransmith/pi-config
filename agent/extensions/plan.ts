@@ -15,7 +15,7 @@ import {
   startCapture,
   stateFor,
   type SnapshotContext,
-} from "./context.js";
+} from "./context/index.js";
 
 const MESSAGE_CUSTOM_TYPE = "plan-command";
 const TOOL_OUTPUT_CAP = 6000;

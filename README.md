@@ -15,7 +15,7 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Ask User Question** (`ask-user-question`) — Interactive multiple-choice clarification tool for agents.
 - **Colour Messages** (`colour-messages`) — Background colours for user, working, and final assistant rows.
 - **Confirm Destructive** (`confirm-destructive.ts`) — Confirm destructive tool calls and bash commands before they run.
-- **Context Snapshot** (`context.ts`) — Append-only durable work captures with a bounded recent-summary appendix added after Pi compacts.
+- **Context Snapshot** (`context/`) — Append-only durable work captures with a bounded, freshly replaced recent-summary appendix after Pi compacts.
 - **Custom Footer** (`custom-footer`) — Compact powerline-style footer with path, context, and model info.
 - **Evidence Store** (`evidence.ts`) — Validated durable snippets with deduplication, paginated discovery, exact final-citation verification, and TUI-only proof.
 - **Meep** (`meep.ts`) — Says meep when the model is done working.

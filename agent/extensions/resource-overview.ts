@@ -44,9 +44,9 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
     title: "Confirm Destructive",
     description: "Confirm destructive tool calls and bash commands before they run.",
   },
-  "context.ts": {
+  "context": {
     title: "Context Snapshot",
-    description: "Durable captures with bounded post-compaction recall.",
+    description: "Durable captures with a bounded appendix freshly replaced after compaction.",
   },
   "custom-footer": {
     title: "Custom Footer",
