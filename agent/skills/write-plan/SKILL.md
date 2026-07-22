@@ -54,6 +54,7 @@ Read the project silently before asking anything. Use read-only commands and fil
 4. Build system and scripts (`Makefile`, `scripts/`, CI config)
 5. `README.md` or `README.*`
 6. Any existing `TODO.md`, `TASKS.md`, `.todo`, or open issue files
+7. The project's verification commands - production build, test suites, typecheck, lint, etc.
 
 Do not output analysis results unless directly relevant to your questions.
 
@@ -95,15 +96,24 @@ Using the analysis and the user's answers, write a `TODO.md` file in the project
 ## Goal
 One sentence describing what will be built or fixed.
 
+## Verification Commands
+The project's verification checks, discovered in analysis.
+
 ## Tasks
 
 ### 1. <Phase Name>
 - [ ] <Concrete, measurable action>
 - [ ] <Concrete, measurable action>
 
+- [ ] <Paths and files likely to be touched during this phase (expected scope, not a hard limit)>
+- [ ] <Verification checks that should be ran to prove the completeness of this phase>
+
 ### 2. <Phase Name>
 - [ ] <Concrete, measurable action>
 - [ ] <Concrete, measurable action>
+
+- [ ] <Paths and files likely to be touched during this phase (expected scope, not a hard limit)>
+- [ ] <Verification checks that should be ran to prove the completeness of this phase>
 
 ## Notes
 Any constraints, decisions, or known risks recorded here.
@@ -115,6 +125,8 @@ Any constraints, decisions, or known risks recorded here.
 - Order tasks by **dependency** (prerequisites first).
 - Each task must be checkable as done/not done.
 - No vague items like "fix things" or "improve code".
+- Every phase should have verification commands that would actually catch a task's failure.
+- Docs-only or config-only tasks may state no verification checks, with a one-line justification.
 
 After writing the file, give the user a summary describing the plan, the thinking, and the intent behind it, and ask for confirmation to start or for any plan amends.
 
@@ -142,6 +154,9 @@ Once approved:
 3. State which task you are starting before you begin it.
 4. Do not start the next task until the current one is complete.
 5. Do not perform any work not listed in `TODO.md`.
+6. Any work required to make the verification checks of a phase pass is considered in-scope, a part of that phase.
+7. Never weaken, skip, or substitute a verification command. If a verification command cannot run for infrastructure reasons (missing tooling, broken runner, environment problem), stop and report it to the user.
+8. If the same phase verification commands fail after two fix attempts, call the advisor before attempting a third.
 
 If you discover that an unlisted task is required:
 - Stop.
@@ -152,9 +167,11 @@ If you discover that an unlisted task is required:
 ## Phase 6 - Completion
 When all tasks are marked `[x]`:
 
-1. Call `ContextSnapshot finish` with a durable summary covering Goal, Key facts, Files with line numbers/functions/symbols, and Outstanding. A good finish summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps.
-2. Pass `force: true` because execution will have caused the capture to observe changes.
-3. Then tell the user: `All tasks in TODO.md are complete.`
+1. Run the full project verification checks. Per-task checks can all pass while a later task breaks what an earlier one verified; this final gate catches drift.
+2. If any command fails, treat the failure as a Discovered Task.
+3. Call `ContextSnapshot finish` with a durable summary covering Goal, Key facts, Files with line numbers/functions/symbols, and Outstanding. A good finish summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps.
+4. Pass `force: true` because execution will have caused the capture to observe changes.
+5. Then tell the user: `All tasks in TODO.md are complete.`
 
 ---
 
