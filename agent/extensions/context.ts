@@ -1,5 +1,5 @@
 /**
- * Agent-controlled captures whose durable summaries survive Pi's ordinary context compaction.
+ * Agent-controlled captures stored durably, with a recent bounded appendix added after Pi compacts.
  *
  * /context - Show this command reference and current snapshot status.
  * /context help - Show this command reference.
@@ -7,7 +7,7 @@
  * /context list - List durable summaries.
  * /context start [label] - Start a capture before substantial work. Only one capture can be active.
  * /context discard - Close the active capture without saving a durable summary.
- * /context compact - Ask Pi to compact now. Durable summaries are preserved in the compaction summary.
+ * /context compact - Ask Pi to compact now. Recent durable summaries are appended to the result.
  *
  * Agent tool equivalent: ContextSnapshot can start, finish, discard, inspect status, and list summaries.
  *
@@ -30,7 +30,8 @@ const STATE_CUSTOM_TYPE = "context-snapshot-state";
 const MESSAGE_CUSTOM_TYPE = "context-snapshot";
 const STATE_VERSION = 1;
 const SUMMARY_CAP = 5000;
-const SUMMARY_CONTEXT_CAP = 8000;
+const SNAPSHOT_APPENDIX_TARGET = 15000;
+const MIN_APPENDIX_SUMMARIES = 3;
 const TOOL_OUTPUT_CAP = 6000;
 
 type SnapshotAction = "start" | "finish" | "discard" | "status" | "list";
@@ -376,7 +377,7 @@ function formatSummaryLine(summary: DurableSummary): string {
 
 function formatSummaryList(state: SessionState): string {
   if (state.summaries.length === 0) return "(no durable context summaries yet)";
-  return state.summaries.map(formatSummaryLine).join("\n");
+  return [...state.summaries].reverse().map(formatSummaryLine).join("\n");
 }
 
 function formatStatus(state: SessionState): string {
@@ -410,36 +411,41 @@ function formatFinishedSummary(summary: DurableSummary): string {
   );
 }
 
-function preservedContext(state: SessionState): string | undefined {
-  if (state.summaries.length === 0) return undefined;
-
-  const chunks = state.summaries.map((summary) =>
-    [
-      `### ${summary.id}: ${summary.label}`,
-      summary.hadChanges ? "(finished after changes were observed)" : undefined,
-      summary.summary,
-    ].filter(Boolean).join("\n"),
-  );
-
-  return truncate(
-    [
-      "## Preserved Context Snapshots",
-      "The following durable summaries were finished before context was collapsed. Treat them as durable working memory.",
-      "",
-      ...chunks,
-    ].join("\n\n"),
-    SUMMARY_CONTEXT_CAP,
-  );
+function formatAppendixSummary(summary: DurableSummary): string {
+  return [
+    `### ${summary.id}: ${summary.label}`,
+    summary.hadChanges ? "(finished after changes were observed)" : undefined,
+    summary.summary,
+  ].filter(Boolean).join("\n");
 }
 
-function compactionInstructions(state: SessionState): string | undefined {
-  const context = preservedContext(state);
-  if (!context) return undefined;
-
+function renderSnapshotAppendix(summaries: DurableSummary[]): string {
   return [
-    "Preserve these durable ContextSnapshot summaries verbatim or near-verbatim in the compaction summary.",
-    context,
+    "## Recent ContextSnapshot Summaries",
+    "These recent durable summaries retain high-detail working context across compaction.",
+    "",
+    ...summaries.map(formatAppendixSummary),
   ].join("\n\n");
+}
+
+function snapshotAppendix(state: SessionState): string | undefined {
+  if (state.summaries.length === 0) return undefined;
+
+  let selectedNewestFirst: DurableSummary[] = [];
+  for (let index = state.summaries.length - 1; index >= 0; index -= 1) {
+    const candidateNewestFirst = [...selectedNewestFirst, state.summaries[index]];
+    const candidate = renderSnapshotAppendix([...candidateNewestFirst].reverse());
+    if (
+      selectedNewestFirst.length < MIN_APPENDIX_SUMMARIES ||
+      candidate.length <= SNAPSHOT_APPENDIX_TARGET
+    ) {
+      selectedNewestFirst = candidateNewestFirst;
+      continue;
+    }
+    break;
+  }
+
+  return renderSnapshotAppendix([...selectedNewestFirst].reverse());
 }
 
 function showCommandMessage(pi: ExtensionAPI, content: string): void {
@@ -474,7 +480,7 @@ function formatCommandHelp(): string {
     "  Close the active capture without saving a durable summary.",
     "",
     "/context compact",
-    "  Ask Pi to compact now. Durable ContextSnapshot summaries are preserved.",
+    "  Ask Pi to compact now. Recent durable ContextSnapshot summaries are appended to the result.",
     "",
     "Agent tool equivalent: ContextSnapshot can start, finish, discard, inspect status, and list summaries.",
   ].join("\n");
@@ -533,14 +539,14 @@ async function runCommand(
     }
 
     if (action === "compact") {
-      const instructions = compactionInstructions(stateFor(ctx));
-      if (instructions) {
-        ctx.compact();
-        showCommandMessage(pi, "compaction requested with preserved context snapshot instructions");
-      } else {
-        ctx.compact();
-        showCommandMessage(pi, "compaction requested; no durable ContextSnapshot summaries yet");
-      }
+      const hasSummaries = stateFor(ctx).summaries.length > 0;
+      ctx.compact();
+      showCommandMessage(
+        pi,
+        hasSummaries
+          ? "compaction requested; recent ContextSnapshot summaries will be appended to the result"
+          : "compaction requested; no durable ContextSnapshot summaries yet",
+      );
       return;
     }
 
@@ -568,23 +574,9 @@ export default function (pi: ExtensionAPI) {
     resetState(ctx.sessionManager.getSessionId());
   });
 
-  pi.on("before_agent_start", async (_event, ctx) => {
-    const context = preservedContext(stateFor(ctx));
-    if (!context) return undefined;
-
-    return {
-      message: {
-        customType: MESSAGE_CUSTOM_TYPE,
-        content: context,
-        display: false,
-        details: { source: STATE_CUSTOM_TYPE },
-      },
-    };
-  });
-
   pi.on("session_before_compact", async (event, ctx) => {
-    const instructions = compactionInstructions(stateFor(ctx));
-    if (!instructions) return undefined;
+    const appendix = snapshotAppendix(stateFor(ctx));
+    if (!appendix) return undefined;
 
     if (!ctx.model) throw new Error("No model available for context snapshot compaction");
 
@@ -594,19 +586,21 @@ export default function (pi: ExtensionAPI) {
       throw new Error(`No API key available for context snapshot compaction with ${ctx.model.provider}`);
     }
 
-    const customInstructions = [instructions, event.customInstructions]
-      .filter(Boolean)
-      .join("\n\n");
     const compaction = await runCompaction(
       event.preparation,
       ctx.model,
       auth.apiKey,
       auth.headers,
-      customInstructions,
+      event.customInstructions,
       event.signal,
     );
 
-    return { compaction };
+    return {
+      compaction: {
+        ...compaction,
+        summary: `${compaction.summary.trimEnd()}\n\n${appendix}`,
+      },
+    };
   });
 
   pi.on("session_compact", async (_event, ctx) => {
@@ -614,7 +608,7 @@ export default function (pi: ExtensionAPI) {
     if (state.summaries.length === 0 || !ctx.hasUI) return;
 
     ctx.ui.notify(
-      `context: ${state.summaries.length} durable summar${state.summaries.length === 1 ? "y" : "ies"} preserved`,
+      "context: recent durable summaries appended to the compaction result",
       "info",
     );
   });
@@ -649,7 +643,7 @@ export default function (pi: ExtensionAPI) {
         { value: "list", description: "List durable summaries." },
         { value: "start", description: "Start a capture before substantial work." },
         { value: "discard", description: "Close the active capture without a durable summary." },
-        { value: "compact", description: "Request compaction while preserving durable summaries." },
+        { value: "compact", description: "Request compaction and append recent durable summaries." },
       ];
       const normalized = (prefix ?? "").trim().toLowerCase();
       const items = options
@@ -671,14 +665,16 @@ export default function (pi: ExtensionAPI) {
     description:
       "Bracket substantial work in a durable context capture. " +
       "Call start before the work, then finish with a structured continuation summary; use discard if nothing should be preserved. " +
+      "Finished summaries remain in session state, and a recent bounded set is appended only when Pi compacts. " +
       "ContextSnapshot never rolls back files or conversation state and never requests compaction.",
     promptSnippet:
-      "ContextSnapshot starts and finishes durable work captures so decisions, facts, files, and open questions survive later user- or Pi-initiated compaction.",
+      "ContextSnapshot starts and finishes durable work captures; summaries remain on disk and recent summaries return in Pi's next compaction result.",
     promptGuidelines: [
       "Use ContextSnapshot start before a broad search, debugging session, design investigation, or any work likely to create throwaway context.",
       "Use ContextSnapshot finish when the capture is complete or before switching tasks. Finish closes the capture and saves durable context; it does not roll anything back.",
       "A good finish summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps.",
       "Keep durable summaries concise but specific. Preserve exact file paths, command names, API names, error messages, and user constraints when they matter.",
+      "Finishing stores the summary without reinjecting it on ordinary turns; recent summaries are appended when Pi next compacts.",
       "If changes were observed after start, finish may require force: true. Only force after the summary accounts for those changes.",
       "Use ContextSnapshot discard only when the active capture should close without a durable summary.",
       "ContextSnapshot must not trigger or request compaction; compaction is controlled by the user or Pi.",

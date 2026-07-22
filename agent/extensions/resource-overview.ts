@@ -46,7 +46,7 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
   },
   "context.ts": {
     title: "Context Snapshot",
-    description: "Durable work captures and continuation summaries.",
+    description: "Durable captures with bounded post-compaction recall.",
   },
   "custom-footer": {
     title: "Custom Footer",
