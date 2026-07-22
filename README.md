@@ -15,11 +15,11 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Ask User Question** (`ask-user-question`) — Interactive multiple-choice clarification tool for agents.
 - **Colour Messages** (`colour-messages`) — Background colours for user, working, and final assistant rows.
 - **Confirm Destructive** (`confirm-destructive.ts`) — Confirm destructive tool calls and bash commands before they run.
-- **Context Snapshot** (`context.ts`) — Durable investigation checkpoints and restore summaries.
+- **Context Snapshot** (`context.ts`) — Durable work captures and continuation summaries.
 - **Custom Footer** (`custom-footer`) — Compact powerline-style footer with path, context, and model info.
 - **Evidence Store** (`evidence.ts`) — Durable citable evidence snippets with list/get/add tools.
 - **Meep** (`meep.ts`) — Says meep when the model is done working.
-- **Plan Command** (`plan.ts`) — Deterministic `/plan` handoff that manages ContextSnapshot checkpoints.
+- **Plan Command** (`plan.ts`) — Deterministic `/plan` handoff that manages ContextSnapshot captures.
 - **Redact Sensitive Data** (`redact.ts`) — Redact secrets from tool output.
 - **Resource Overview** (`resource-overview.ts`) — Richer startup overview for loaded skills and extensions.
 - **Response Metrics** (`response-metrics.ts`) — Persistent TUI-only elapsed-time, tool-call, and input/output-token row beneath each completed response.

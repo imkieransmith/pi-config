@@ -20,17 +20,17 @@ description: Structured planning workflow for substantive coding work. Use at th
 ### Phase 0 - Context preservation with ContextSnapshot
 At the start of each new piece of work, preserve context with ContextSnapshot:
   1. Check `ContextSnapshot` status.
-  2. If a checkpoint is active, call `ContextSnapshot restore` first with a structured summary of the completed/previous work. A good restore summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps. Pass `force: true` if the checkpoint is dirty, and make sure the summary accounts for those mutations.
-  3. Then call `ContextSnapshot save` with a specific descriptive label for the new work before Phase 1. Use labels like `auth-token-refresh-race`, not generic labels like `bug-fix` or `investigation`.
-- At the end of completed work, call `ContextSnapshot restore` with a final summary and `force: true` before declaring completion. Phase 5 almost always leaves the checkpoint dirty.
+  2. If a capture is active, call `ContextSnapshot finish` first with a structured durable summary of the completed/previous work. A good finish summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps. Pass `force: true` if changes were observed, and make sure the summary accounts for those mutations.
+  3. Then call `ContextSnapshot start` with a specific descriptive label for the new work before Phase 1. Use labels like `auth-token-refresh-race`, not generic labels like `bug-fix` or `investigation`.
+- At the end of completed work, call `ContextSnapshot finish` with a final durable summary and `force: true` before declaring completion. Phase 5 almost always causes the capture to observe changes.
 
-Restore summaries must include:
+Durable finish summaries must include:
 - Goal: what the previous work was trying to accomplish.
 - Key facts: important discoveries, decisions, constraints, and errors.
 - Files: paths plus specific line numbers, function names, or symbols that future work may need to revisit. The Files section is a map back to the code, not just a list of what was opened.
 - Outstanding: open questions, risks, blockers, and next steps.
 
-Example restore summary:
+Example durable finish summary:
 
 ```
 Goal: Fix race in token refresh on cache miss.
@@ -152,12 +152,12 @@ If you discover that an unlisted task is required:
 ## Phase 6 - Completion
 When all tasks are marked `[x]`:
 
-1. Call `ContextSnapshot restore` with a summary covering Goal, Key facts, Files with line numbers/functions/symbols, and Outstanding. A good restore summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps.
-2. Pass `force: true` because execution will have made the checkpoint dirty.
+1. Call `ContextSnapshot finish` with a durable summary covering Goal, Key facts, Files with line numbers/functions/symbols, and Outstanding. A good finish summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps.
+2. Pass `force: true` because execution will have caused the capture to observe changes.
 3. Then tell the user: `All tasks in TODO.md are complete.`
 
 ---
 
-Do not skip Phase 0. The snapshot is what survives compaction; without it, the previous work is preserved only in raw chat history that may be collapsed later.
+Do not skip Phase 0. The capture's durable summary is what survives compaction; without it, the previous work is preserved only in raw chat history that may be collapsed later.
 
-Do not skip Phase 6. The final restore is what preserves the context of the current completed work for future reference.
+Do not skip Phase 6. Finishing the capture with a durable summary is what preserves the context of the current completed work for future reference.

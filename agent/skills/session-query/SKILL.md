@@ -23,7 +23,7 @@ session_query(sessionPath, question)
 - `question`: Specific question about that session (e.g., "What files were modified?" or "What approach was chosen?")
 - `detailed`: Optional. Set `true` when you need exact tool output, exact file contents, or raw/custom session entry details.
 
-The tool can search regular conversation messages and session metadata, including Evidence entries, ContextSnapshot checkpoints/restored summaries, compaction summaries, branch summaries, and custom messages. Ask directly for these when needed.
+The tool can search regular conversation messages and session metadata, including Evidence entries, ContextSnapshot captures and durable summaries, compaction summaries, branch summaries, and custom messages. Ask directly for these when needed.
 
 ## Examples
 
@@ -31,7 +31,7 @@ The tool can search regular conversation messages and session metadata, includin
 session_query("/path/to/session.jsonl", "What files were modified?")
 session_query("/path/to/session.jsonl", "What approach was chosen for authentication?")
 session_query("/path/to/session.jsonl", "Summarize the key decisions made")
-session_query("/path/to/session.jsonl", "What Evidence entries or ContextSnapshot summaries were saved?")
+session_query("/path/to/session.jsonl", "What Evidence entries or ContextSnapshot durable summaries were recorded?")
 session_query("/path/to/session.jsonl", "What exact tool output mentioned the failing test?", detailed=true)
 ```
 

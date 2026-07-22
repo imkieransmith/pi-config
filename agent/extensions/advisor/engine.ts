@@ -183,7 +183,7 @@ function latestContextSnapshotSummaries(ctx: ExtensionContext): string {
 		.slice(-PAYLOAD.maxSnapshotSummaries)
 		.reverse();
 
-	if (summaries.length === 0) return "(no saved ContextSnapshot restore summaries found)";
+	if (summaries.length === 0) return "(no ContextSnapshot durable summaries found)";
 
 	const rendered = summaries
 		.map((s) => {
@@ -349,7 +349,7 @@ export function buildAdvisorPayload(ctx: ExtensionContext, pi: ExtensionAPI): Ad
 			"## TODO.md",
 			readTodoMd(ctx),
 			"",
-			"## Recent ContextSnapshot summaries",
+			"## Recent ContextSnapshot durable summaries",
 			latestContextSnapshotSummaries(ctx),
 			"",
 			"## Most recent prior advisor guidance",

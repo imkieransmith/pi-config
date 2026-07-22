@@ -1,15 +1,15 @@
 /**
- * Agent-controlled checkpoints whose summaries survive Pi's ordinary context compaction.
+ * Agent-controlled captures whose durable summaries survive Pi's ordinary context compaction.
  *
  * /context - Show this command reference and current snapshot status.
  * /context help - Show this command reference.
- * /context status - Show the active checkpoint, dirty state, and recent saved summaries.
- * /context list - List saved durable summaries.
- * /context save [label] - Start a checkpoint before a large investigation. Only one checkpoint can be active.
- * /context cancel - Discard the active checkpoint without saving a summary.
- * /context compact - Ask Pi to compact now. Saved context snapshots are preserved in the compaction summary.
+ * /context status - Show the active capture, change state, and recent durable summaries.
+ * /context list - List durable summaries.
+ * /context start [label] - Start a capture before substantial work. Only one capture can be active.
+ * /context discard - Close the active capture without saving a durable summary.
+ * /context compact - Ask Pi to compact now. Durable summaries are preserved in the compaction summary.
  *
- * Agent tool equivalent: ContextSnapshot can save, restore, cancel, status, and list.
+ * Agent tool equivalent: ContextSnapshot can start, finish, discard, inspect status, and list summaries.
  *
  * Inspired by - https://swival.dev/pages/context-management.html
  */
@@ -33,7 +33,8 @@ const SUMMARY_CAP = 5000;
 const SUMMARY_CONTEXT_CAP = 8000;
 const TOOL_OUTPUT_CAP = 6000;
 
-type SnapshotAction = "save" | "restore" | "cancel" | "status" | "list";
+type SnapshotAction = "start" | "finish" | "discard" | "status" | "list";
+type LegacySnapshotAction = "save" | "restore" | "cancel";
 
 type SnapshotStateEvent =
   | {
@@ -70,28 +71,28 @@ type SnapshotStateEvent =
       createdAt: number;
     };
 
-export interface ActiveCheckpoint {
+export interface ActiveCapture {
   id: string;
   label: string;
   createdAt: number;
   leafId?: string;
-  dirty: boolean;
-  dirtyReason?: string;
+  changesObserved: boolean;
+  changeReason?: string;
 }
 
-export interface SavedSummary {
+export interface DurableSummary {
   id: string;
-  checkpointId: string;
+  captureId: string;
   label: string;
   summary: string;
   forced: boolean;
-  wasDirty: boolean;
+  hadChanges: boolean;
   createdAt: number;
 }
 
 export interface SessionState {
-  active?: ActiveCheckpoint;
-  summaries: SavedSummary[];
+  active?: ActiveCapture;
+  summaries: DurableSummary[];
 }
 
 export type SnapshotContext = ExtensionCommandContext | ExtensionContext;
@@ -114,7 +115,7 @@ function truncate(text: string, cap: number): string {
 
 function cleanLabel(raw: string | undefined): string {
   const label = (raw ?? "").trim();
-  return label || "checkpoint";
+  return label || "capture";
 }
 
 function cleanSummary(raw: string | undefined): string {
@@ -174,20 +175,21 @@ function hydrateState(entries: SessionEntry[]): SessionState {
     const event = getStateEvent(entry);
     if (!event) continue;
 
+    // Persisted V1 event names remain unchanged for existing sessions.
     if (event.type === "save") {
       state.active = {
         id: event.checkpointId,
         label: event.label,
         createdAt: event.createdAt,
         leafId: event.leafId,
-        dirty: false,
+        changesObserved: false,
       };
       continue;
     }
 
     if (event.type === "dirty" && state.active?.id === event.checkpointId) {
-      state.active.dirty = true;
-      state.active.dirtyReason = event.reason;
+      state.active.changesObserved = true;
+      state.active.changeReason = event.reason;
       continue;
     }
 
@@ -199,11 +201,11 @@ function hydrateState(entries: SessionEntry[]): SessionState {
     if (event.type === "restore") {
       state.summaries.push({
         id: event.summaryId,
-        checkpointId: event.checkpointId,
+        captureId: event.checkpointId,
         label: event.label,
         summary: event.summary,
         forced: event.forced,
-        wasDirty: event.wasDirty,
+        hadChanges: event.wasDirty,
         createdAt: event.createdAt,
       });
       if (state.active?.id === event.checkpointId) state.active = undefined;
@@ -217,109 +219,109 @@ function appendStateEvent(pi: ExtensionAPI, event: SnapshotStateEvent): void {
   pi.appendEntry(STATE_CUSTOM_TYPE, event);
 }
 
-export function saveCheckpoint(pi: ExtensionAPI, ctx: SnapshotContext, label: string | undefined): string {
+export function startCapture(pi: ExtensionAPI, ctx: SnapshotContext, label: string | undefined): string {
   const state = stateFor(ctx);
   if (state.active) {
     throw new Error(
-      `context checkpoint '${state.active.label}' is already active; restore or cancel it before saving another`,
+      `context capture '${state.active.label}' is already active; finish or discard it before starting another`,
     );
   }
 
-  const checkpoint: ActiveCheckpoint = {
+  const capture: ActiveCapture = {
     id: id("c"),
     label: cleanLabel(label),
     createdAt: now(),
     leafId: ctx.sessionManager.getLeafId(),
-    dirty: false,
+    changesObserved: false,
   };
 
-  state.active = checkpoint;
+  state.active = capture;
   appendStateEvent(pi, {
     version: STATE_VERSION,
     type: "save",
-    checkpointId: checkpoint.id,
-    label: checkpoint.label,
-    createdAt: checkpoint.createdAt,
-    leafId: checkpoint.leafId,
+    checkpointId: capture.id,
+    label: capture.label,
+    createdAt: capture.createdAt,
+    leafId: capture.leafId,
   });
 
-  return checkpoint.id;
+  return capture.id;
 }
 
-function cancelCheckpoint(pi: ExtensionAPI, ctx: SnapshotContext): string {
+function discardCapture(pi: ExtensionAPI, ctx: SnapshotContext): string {
   const state = stateFor(ctx);
-  if (!state.active) throw new Error("no active context checkpoint to cancel");
+  if (!state.active) throw new Error("no active context capture to discard");
 
-  const checkpoint = state.active;
+  const capture = state.active;
   state.active = undefined;
   appendStateEvent(pi, {
     version: STATE_VERSION,
     type: "cancel",
-    checkpointId: checkpoint.id,
+    checkpointId: capture.id,
     createdAt: now(),
   });
 
-  return checkpoint.id;
+  return capture.id;
 }
 
-export function restoreCheckpoint(
+export function finishCapture(
   pi: ExtensionAPI,
   ctx: SnapshotContext,
-  summary: string,
+  summary: string | undefined,
   force: boolean,
-): SavedSummary {
+): DurableSummary {
   const state = stateFor(ctx);
-  if (!state.active) throw new Error("no active context checkpoint to restore");
+  if (!state.active) throw new Error("no active context capture to finish");
 
-  const checkpoint = state.active;
-  if (checkpoint.dirty && !force) {
+  const capture = state.active;
+  if (capture.changesObserved && !force) {
     throw new Error(
-      `checkpoint '${checkpoint.label}' is dirty (${checkpoint.dirtyReason ?? "mutation observed"}); ` +
-        "retry with force: true after confirming the summary accounts for those changes",
+      `capture '${capture.label}' has observed changes (${capture.changeReason ?? "mutation observed"}); ` +
+        "retry with force: true after confirming the durable summary accounts for those changes",
     );
   }
 
   const cleaned = cleanSummary(summary);
-  if (!cleaned) throw new Error("summary is required for restore");
+  if (!cleaned) throw new Error("durable summary is required to finish a capture");
 
-  const saved: SavedSummary = {
+  const durableSummary: DurableSummary = {
     id: id("s"),
-    checkpointId: checkpoint.id,
-    label: checkpoint.label,
+    captureId: capture.id,
+    label: capture.label,
     summary: cleaned,
     forced: force,
-    wasDirty: checkpoint.dirty,
+    hadChanges: capture.changesObserved,
     createdAt: now(),
   };
 
-  state.summaries.push(saved);
+  state.summaries.push(durableSummary);
   state.active = undefined;
   appendStateEvent(pi, {
     version: STATE_VERSION,
     type: "restore",
-    checkpointId: checkpoint.id,
-    summaryId: saved.id,
-    label: saved.label,
-    summary: saved.summary,
-    forced: saved.forced,
-    wasDirty: saved.wasDirty,
-    createdAt: saved.createdAt,
+    checkpointId: capture.id,
+    summaryId: durableSummary.id,
+    label: durableSummary.label,
+    summary: durableSummary.summary,
+    forced: durableSummary.forced,
+    wasDirty: durableSummary.hadChanges,
+    createdAt: durableSummary.createdAt,
   });
 
-  return saved;
+  return durableSummary;
 }
 
-function markDirty(pi: ExtensionAPI, ctx: ExtensionContext, reason: string, toolName?: string): void {
+function markChangesObserved(pi: ExtensionAPI, ctx: ExtensionContext, reason: string, toolName?: string): void {
   const state = stateFor(ctx);
-  const checkpoint = state.active;
-  if (!checkpoint || checkpoint.dirty) return;
+  const capture = state.active;
+  if (!capture || capture.changesObserved) return;
 
-  checkpoint.dirty = true;
-  checkpoint.dirtyReason = reason;
+  capture.changesObserved = true;
+  capture.changeReason = reason;
   appendStateEvent(pi, {
     version: STATE_VERSION,
     type: "dirty",
-    checkpointId: checkpoint.id,
+    checkpointId: capture.id,
     reason,
     toolName,
     createdAt: now(),
@@ -357,23 +359,23 @@ function formatDate(ms: number): string {
   return new Date(ms).toISOString();
 }
 
-function formatActive(active: ActiveCheckpoint | undefined): string {
-  if (!active) return "active: none";
+function formatActive(active: ActiveCapture | undefined): string {
+  if (!active) return "active capture: none";
 
-  const dirty = active.dirty
-    ? `dirty (${active.dirtyReason ?? "mutation observed"})`
-    : "clean";
-  return `active: ${active.id} '${active.label}' - ${dirty} - ${formatDate(active.createdAt)}`;
+  const changeState = active.changesObserved
+    ? `changes observed (${active.changeReason ?? "mutation observed"})`
+    : "no changes observed";
+  return `active capture: ${active.id} '${active.label}' - ${changeState} - ${formatDate(active.createdAt)}`;
 }
 
-function formatSummaryLine(summary: SavedSummary): string {
-  const dirty = summary.wasDirty ? ", dirty" : "";
+function formatSummaryLine(summary: DurableSummary): string {
+  const changes = summary.hadChanges ? ", changes observed" : "";
   const forced = summary.forced ? ", forced" : "";
-  return `${summary.id}\t${summary.label}\t${formatDate(summary.createdAt)}${dirty}${forced}`;
+  return `${summary.id}\t${summary.label}\t${formatDate(summary.createdAt)}${changes}${forced}`;
 }
 
 function formatSummaryList(state: SessionState): string {
-  if (state.summaries.length === 0) return "(no saved context summaries yet)";
+  if (state.summaries.length === 0) return "(no durable context summaries yet)";
   return state.summaries.map(formatSummaryLine).join("\n");
 }
 
@@ -381,11 +383,11 @@ function formatStatus(state: SessionState): string {
   const lines = [
     "Context snapshots",
     formatActive(state.active),
-    `saved summaries: ${state.summaries.length}`,
+    `durable summaries: ${state.summaries.length}`,
   ];
 
   if (state.summaries.length > 0) {
-    lines.push("", "recent summaries:", formatSummaryList({
+    lines.push("", "recent durable summaries:", formatSummaryList({
       ...state,
       summaries: state.summaries.slice(-5),
     }));
@@ -394,13 +396,13 @@ function formatStatus(state: SessionState): string {
   return truncate(lines.join("\n"), TOOL_OUTPUT_CAP);
 }
 
-function formatSavedSummary(summary: SavedSummary): string {
+function formatFinishedSummary(summary: DurableSummary): string {
   return truncate(
     [
-      `saved ${summary.id}: ${summary.label}`,
-      summary.wasDirty
-        ? "checkpoint was dirty; summary was accepted with force"
-        : "checkpoint was clean",
+      `finished capture ${summary.captureId} '${summary.label}'; saved durable summary ${summary.id}`,
+      summary.hadChanges
+        ? "changes were observed; durable summary was accepted with force"
+        : "no changes were observed during the capture",
       "",
       summary.summary,
     ].join("\n"),
@@ -414,7 +416,7 @@ function preservedContext(state: SessionState): string | undefined {
   const chunks = state.summaries.map((summary) =>
     [
       `### ${summary.id}: ${summary.label}`,
-      summary.wasDirty ? "(restored from a dirty checkpoint)" : undefined,
+      summary.hadChanges ? "(finished after changes were observed)" : undefined,
       summary.summary,
     ].filter(Boolean).join("\n"),
   );
@@ -422,7 +424,7 @@ function preservedContext(state: SessionState): string | undefined {
   return truncate(
     [
       "## Preserved Context Snapshots",
-      "The following summaries were explicitly saved before context was collapsed. Treat them as durable working memory.",
+      "The following durable summaries were finished before context was collapsed. Treat them as durable working memory.",
       "",
       ...chunks,
     ].join("\n\n"),
@@ -435,7 +437,7 @@ function compactionInstructions(state: SessionState): string | undefined {
   if (!context) return undefined;
 
   return [
-    "Preserve these ContextSnapshot summaries verbatim or near-verbatim in the compaction summary.",
+    "Preserve these durable ContextSnapshot summaries verbatim or near-verbatim in the compaction summary.",
     context,
   ].join("\n\n");
 }
@@ -460,30 +462,39 @@ function formatCommandHelp(): string {
     "  Show this command reference.",
     "",
     "/context status",
-    "  Show the active checkpoint, dirty state, and recent saved summaries.",
+    "  Show the active capture, whether changes were observed, and recent durable summaries.",
     "",
     "/context list",
-    "  List saved durable summaries.",
+    "  List durable summaries.",
     "",
-    "/context save <label>",
-    "  Start a checkpoint before a large investigation. Only one checkpoint can be active.",
+    "/context start <label>",
+    "  Start a capture before substantial work. Only one capture can be active.",
     "",
-    "/context cancel",
-    "  Discard the active checkpoint without saving a summary.",
+    "/context discard",
+    "  Close the active capture without saving a durable summary.",
     "",
     "/context compact",
-    "  Ask Pi to compact now. Saved context snapshots are preserved in the compaction summary.",
+    "  Ask Pi to compact now. Durable ContextSnapshot summaries are preserved.",
     "",
-    "Agent tool equivalent: ContextSnapshot can save, restore, cancel, status, and list.",
+    "Agent tool equivalent: ContextSnapshot can start, finish, discard, inspect status, and list summaries.",
   ].join("\n");
+}
+
+function normalizeLegacyAction(action: string): string {
+  const aliases: Record<LegacySnapshotAction, SnapshotAction> = {
+    save: "start",
+    restore: "finish",
+    cancel: "discard",
+  };
+  return aliases[action as LegacySnapshotAction] ?? action;
 }
 
 function parseCommand(args: string): { action: string; rest: string } {
   const trimmed = (args ?? "").trim();
   if (!trimmed) return { action: "help", rest: "" };
 
-  const [action, ...rest] = trimmed.split(/\s+/);
-  return { action: action.toLowerCase(), rest: rest.join(" ") };
+  const [rawAction, ...rest] = trimmed.split(/\s+/);
+  return { action: normalizeLegacyAction(rawAction.toLowerCase()), rest: rest.join(" ") };
 }
 
 async function runCommand(
@@ -509,15 +520,15 @@ async function runCommand(
       return;
     }
 
-    if (action === "save") {
-      const checkpointId = saveCheckpoint(pi, ctx, rest);
-      showCommandMessage(pi, `saved checkpoint ${checkpointId}: ${cleanLabel(rest)}`);
+    if (action === "start") {
+      const captureId = startCapture(pi, ctx, rest);
+      showCommandMessage(pi, `started capture ${captureId}: ${cleanLabel(rest)}`);
       return;
     }
 
-    if (action === "cancel") {
-      const checkpointId = cancelCheckpoint(pi, ctx);
-      showCommandMessage(pi, `cancelled checkpoint ${checkpointId}`);
+    if (action === "discard") {
+      const captureId = discardCapture(pi, ctx);
+      showCommandMessage(pi, `discarded capture ${captureId}`);
       return;
     }
 
@@ -528,7 +539,7 @@ async function runCommand(
         showCommandMessage(pi, "compaction requested with preserved context snapshot instructions");
       } else {
         ctx.compact();
-        showCommandMessage(pi, "compaction requested; no saved context snapshots yet");
+        showCommandMessage(pi, "compaction requested; no durable ContextSnapshot summaries yet");
       }
       return;
     }
@@ -603,12 +614,12 @@ export default function (pi: ExtensionAPI) {
     if (state.summaries.length === 0 || !ctx.hasUI) return;
 
     ctx.ui.notify(
-      `context: ${state.summaries.length} saved summar${state.summaries.length === 1 ? "y" : "ies"} preserved`,
+      `context: ${state.summaries.length} durable summar${state.summaries.length === 1 ? "y" : "ies"} preserved`,
       "info",
     );
   });
 
-  // Dirty tracking
+  // Change tracking
 
   pi.on("tool_call", async (event) => {
     const mutation = mutationFromToolCall(event);
@@ -624,7 +635,7 @@ export default function (pi: ExtensionAPI) {
     if (!mutation) return;
 
     const suffix = event.isError ? "failed " : "";
-    markDirty(pi, ctx, `${suffix}${mutation.reason}`, mutation.toolName);
+    markChangesObserved(pi, ctx, `${suffix}${mutation.reason}`, mutation.toolName);
   });
 
   // Commands
@@ -634,11 +645,11 @@ export default function (pi: ExtensionAPI) {
     getArgumentCompletions: (prefix: string) => {
       const options = [
         { value: "help", description: "Show the command reference and current status." },
-        { value: "status", description: "Show active checkpoint, dirty state, and recent summaries." },
-        { value: "list", description: "List saved durable summaries." },
-        { value: "save", description: "Start a checkpoint before a large investigation." },
-        { value: "cancel", description: "Discard the active checkpoint." },
-        { value: "compact", description: "Request compaction while preserving saved snapshots." },
+        { value: "status", description: "Show the active capture and recent durable summaries." },
+        { value: "list", description: "List durable summaries." },
+        { value: "start", description: "Start a capture before substantial work." },
+        { value: "discard", description: "Close the active capture without a durable summary." },
+        { value: "compact", description: "Request compaction while preserving durable summaries." },
       ];
       const normalized = (prefix ?? "").trim().toLowerCase();
       const items = options
@@ -658,38 +669,41 @@ export default function (pi: ExtensionAPI) {
     name: "ContextSnapshot",
     label: "ContextSnapshot",
     description:
-      "Manage durable context checkpoints for long or exploratory work. " +
-      "Call save before a large investigation, then call restore with a structured summary of what mattered. " +
-      "Saved restore summaries are reintroduced after context compaction so important discoveries survive.",
+      "Bracket substantial work in a durable context capture. " +
+      "Call start before the work, then finish with a structured continuation summary; use discard if nothing should be preserved. " +
+      "ContextSnapshot never rolls back files or conversation state and never requests compaction.",
     promptSnippet:
-      "ContextSnapshot saves durable checkpoints and restore summaries for long investigations; use it to keep context compact without losing decisions, facts, files, or open questions.",
+      "ContextSnapshot starts and finishes durable work captures so decisions, facts, files, and open questions survive later user- or Pi-initiated compaction.",
     promptGuidelines: [
-      "Use ContextSnapshot save before a broad search, debugging session, design investigation, or any work likely to create throwaway context.",
-      "Use ContextSnapshot restore when the investigation is complete or before switching tasks. Do not merely say 'summary'; write a continuation-ready recap.",
-      "A good restore summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps.",
-      "Keep restore summaries concise but specific. Preserve exact file paths, command names, API names, error messages, and user constraints when they matter.",
-      "If mutations happened after save, restore may require force: true. Only force after the summary accounts for those changes.",
-      "Set triggerCompact true on restore when the surrounding conversation should be compacted immediately after saving the durable summary.",
+      "Use ContextSnapshot start before a broad search, debugging session, design investigation, or any work likely to create throwaway context.",
+      "Use ContextSnapshot finish when the capture is complete or before switching tasks. Finish closes the capture and saves durable context; it does not roll anything back.",
+      "A good finish summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps.",
+      "Keep durable summaries concise but specific. Preserve exact file paths, command names, API names, error messages, and user constraints when they matter.",
+      "If changes were observed after start, finish may require force: true. Only force after the summary accounts for those changes.",
+      "Use ContextSnapshot discard only when the active capture should close without a durable summary.",
+      "ContextSnapshot must not trigger or request compaction; compaction is controlled by the user or Pi.",
     ],
     executionMode: "sequential",
     parameters: Type.Object({
-      action: StringEnum(["save", "restore", "cancel", "status", "list"], {
+      action: StringEnum(["start", "finish", "discard", "status", "list"], {
         description: "Snapshot action to perform.",
       }),
       label: Type.Optional(Type.String({
-        description: "Human-readable checkpoint label for save, such as 'auth bug investigation' or 'context extension design'.",
+        description: "Human-readable capture label for start, such as 'auth bug investigation' or 'context extension design'.",
       })),
       summary: Type.Optional(Type.String({
         description:
-          "Required for restore. Use a structured continuation summary covering goal, key facts/decisions, files touched or inspected and why, and outstanding questions/next steps.",
+          "Required for finish. Use a structured continuation summary covering goal, key facts/decisions, files touched or inspected and why, and outstanding questions/next steps.",
       })),
       force: Type.Optional(Type.Boolean({
-        description: "Allow restore when the checkpoint observed file or command mutations. Use only after the summary accounts for those changes.",
-      })),
-      triggerCompact: Type.Optional(Type.Boolean({
-        description: "After restore, request Pi compaction with snapshot preservation instructions.",
+        description: "Allow finish when the capture observed file or command mutations. Use only after the durable summary accounts for those changes.",
       })),
     }),
+    prepareArguments(args) {
+      if (!isRecord(args) || typeof args.action !== "string") return args;
+      const action = normalizeLegacyAction(args.action);
+      return action === args.action ? args : { ...args, action };
+    },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const action = params.action as SnapshotAction;
 
@@ -704,33 +718,30 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      if (action === "save") {
-        const checkpointId = saveCheckpoint(pi, ctx, params.label);
+      if (action === "start") {
+        const captureId = startCapture(pi, ctx, params.label);
         return {
           content: [{
             type: "text",
-            text: `saved checkpoint ${checkpointId}: ${cleanLabel(params.label)}`,
+            text: `started capture ${captureId}: ${cleanLabel(params.label)}`,
           }],
           details: {},
         };
       }
 
-      if (action === "cancel") {
-        const checkpointId = cancelCheckpoint(pi, ctx);
+      if (action === "discard") {
+        const captureId = discardCapture(pi, ctx);
         return {
-          content: [{ type: "text", text: `cancelled checkpoint ${checkpointId}` }],
+          content: [{ type: "text", text: `discarded capture ${captureId}` }],
           details: {},
         };
       }
 
-      if (action === "restore") {
-        const saved = restoreCheckpoint(pi, ctx, params.summary, params.force === true);
-        if (params.triggerCompact === true) {
-          ctx.compact();
-        }
+      if (action === "finish") {
+        const durableSummary = finishCapture(pi, ctx, params.summary, params.force === true);
 
         return {
-          content: [{ type: "text", text: formatSavedSummary(saved) }],
+          content: [{ type: "text", text: formatFinishedSummary(durableSummary) }],
           details: {},
         };
       }

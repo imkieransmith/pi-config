@@ -46,7 +46,7 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
   },
   "context.ts": {
     title: "Context Snapshot",
-    description: "Durable investigation checkpoints and restore summaries.",
+    description: "Durable work captures and continuation summaries.",
   },
   "custom-footer": {
     title: "Custom Footer",
@@ -62,7 +62,7 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
   },
   "plan.ts": {
     title: "Plan Command",
-    description: "Deterministic /plan handoff that manages ContextSnapshot checkpoints.",
+    description: "Deterministic /plan handoff that manages ContextSnapshot captures.",
   },
   "redact.ts": {
     title: "Redact Sensitive Data",

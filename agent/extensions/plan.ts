@@ -1,18 +1,18 @@
 /**
- * A tool to force the use of the plan skill and a context checkpoint.
- * - An existing checkpoint will be saved with a comprehensive summary.
- * - A new checkpoint will be created.
+ * A tool to force the use of the plan skill and a ContextSnapshot capture.
+ * - An existing capture will be finished with a comprehensive durable summary.
+ * - A new capture will be started.
  * - The write-plan skill is loaded in full.
  *
- * /plan [message] - store the checkpoint and build a new plan.
+ * /plan [message] - finish the prior capture and build a new plan.
  *
  * Plan skill original - https://www.reddit.com/r/LocalLLaMA/comments/1stjwg5/been_using_pi_coding_agent_with_local_qwen36_35b/
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
-  type ActiveCheckpoint,
-  restoreCheckpoint,
-  saveCheckpoint,
+  type ActiveCapture,
+  finishCapture,
+  startCapture,
   stateFor,
   type SnapshotContext,
 } from "./context.js";
@@ -43,7 +43,7 @@ function formatPlanHelp(): string {
     "Plan command",
     "",
     "/plan <message>",
-    "  Restore any active ContextSnapshot checkpoint, save a fresh checkpoint, load the write-plan skill, and forward <message> to the agent.",
+    "  Finish any active ContextSnapshot capture, start a fresh capture, load the write-plan skill, and forward <message> to the agent.",
     "",
     "Example:",
     "  /plan add OAuth refresh tests",
@@ -97,18 +97,18 @@ function recentConversationDigest(ctx: SnapshotContext, maxEntries = 8): string 
     : "- No recent user/assistant messages were available to summarize deterministically.";
 }
 
-function formatPlanRestoreSummary(ctx: SnapshotContext, active: ActiveCheckpoint, request: string): string {
-  const dirty = active.dirty
-    ? `The checkpoint was dirty (${active.dirtyReason ?? "mutation observed"}); this forced restore intentionally closes that dirty checkpoint before starting /plan.`
-    : "The checkpoint was clean.";
+function formatPlanFinishSummary(ctx: SnapshotContext, active: ActiveCapture, request: string): string {
+  const changes = active.changesObserved
+    ? `Changes were observed (${active.changeReason ?? "mutation observed"}); this forced finish intentionally closes the capture after recording those changes.`
+    : "No changes were observed during the capture.";
 
   return [
-    "Goal: Close the active ContextSnapshot checkpoint before deterministic /plan handoff.",
-    `Key facts: /plan was invoked for: ${request}. Previous checkpoint ${active.id} '${active.label}' is being restored with force so a fresh planning checkpoint can start. ${dirty}`,
+    "Goal: Finish the active ContextSnapshot capture before deterministic /plan handoff.",
+    `Key facts: /plan was invoked for: ${request}. Previous capture ${active.id} '${active.label}' is being finished with force so a fresh planning capture can start. ${changes}`,
     "Files: No file list was inferred automatically by /plan; consult the preserved recent conversation digest and prior tool results for exact paths.",
     "Recent conversation digest:",
     recentConversationDigest(ctx),
-    "Outstanding: Continue with the new /plan request after saving a fresh checkpoint and loading the write-plan skill.",
+    "Outstanding: Continue with the new /plan request after starting a fresh capture and loading the write-plan skill.",
   ].join("\n");
 }
 
@@ -131,17 +131,17 @@ async function runPlanCommand(
 
   await ctx.waitForIdle();
   const state = stateFor(ctx);
-  const restoredLabel = state.active?.label;
+  const finishedLabel = state.active?.label;
 
   if (state.active) {
-    restoreCheckpoint(pi, ctx, formatPlanRestoreSummary(ctx, state.active, request), true);
+    finishCapture(pi, ctx, formatPlanFinishSummary(ctx, state.active, request), true);
   }
 
-  const checkpointId = saveCheckpoint(pi, ctx, planLabel(request));
-  const restoredText = restoredLabel ? `Restored previous checkpoint '${restoredLabel}', then ` : "";
+  const captureId = startCapture(pi, ctx, planLabel(request));
+  const finishedText = finishedLabel ? `Finished previous capture '${finishedLabel}', then ` : "";
   showCommandMessage(
     pi,
-    `${restoredText}saved fresh planning checkpoint ${checkpointId}. Forwarding request with write-plan loaded.`,
+    `${finishedText}started fresh planning capture ${captureId}. Forwarding request with write-plan loaded.`,
   );
   pi.sendUserMessage(`/skill:write-plan ${request}`);
 }

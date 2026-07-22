@@ -113,13 +113,31 @@ function formatEvidenceState(entry: SessionEntry, data: Record<string, unknown>)
 }
 
 function formatContextSnapshotState(entry: SessionEntry, data: Record<string, unknown>): string {
-	const type = String(data.type ?? "event");
+	const persistedType = String(data.type ?? "event");
+	const publicTypes: Record<string, string> = {
+		save: "start",
+		dirty: "changes_observed",
+		cancel: "discard",
+		restore: "finish",
+	};
+	const type = publicTypes[persistedType] ?? persistedType;
 	const lines = [`${entryPrefix(entry)} ContextSnapshot ${type}`];
+	const fields = [
+		["checkpointId", "captureId"],
+		["summaryId", "summaryId"],
+		["label", "label"],
+		["reason", "reason"],
+		["toolName", "toolName"],
+		["forced", "forced"],
+		["wasDirty", "changesObserved"],
+		["createdAt", "createdAt"],
+		["leafId", "leafId"],
+	] as const;
 
-	for (const key of ["checkpointId", "summaryId", "label", "reason", "toolName", "forced", "wasDirty", "createdAt", "leafId"]) {
-		if (key in data) lines.push(`${key}: ${String(data[key])}`);
+	for (const [persistedKey, displayKey] of fields) {
+		if (persistedKey in data) lines.push(`${displayKey}: ${String(data[persistedKey])}`);
 	}
-	if (typeof data.summary === "string") lines.push(`summary:\n${data.summary}`);
+	if (typeof data.summary === "string") lines.push(`durableSummary:\n${data.summary}`);
 
 	return lines.join("\n");
 }
