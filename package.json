@@ -5,6 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:advisor": "node --test agent/extensions/advisor/brief.test.ts",
     "test:context": "node --test agent/extensions/context/appendix.test.ts",
     "test:evidence": "node --test agent/extensions/evidence/core.test.ts"
   },

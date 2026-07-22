@@ -2,9 +2,8 @@
  * Advisor engine — shared core for the advisor tool.
  *
  * Builds one bounded, token-budgeted snapshot of the current work and consults a
- * configured reviewer model for a single recommended next move. The same payload
- * is used regardless of the active model; only the *framing* the model sees
- * (liberal vs when-stuck) varies, and that lives in index.ts.
+ * fixed reviewer model for a single recommended next move. The same bounded
+ * payload and static usage contract are used regardless of the active model.
  *
  * Merged from the former `advisor` (rich diagnostic + images) and `senior-dev`
  * (bounded project packet + debug logging) extensions.
@@ -13,7 +12,6 @@
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Api, ImageContent, Message, Model, StopReason, TextContent, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai";
 import {
@@ -24,6 +22,7 @@ import {
 	type SessionEntry,
 	type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
+import { renderAdvisorBrief } from "./brief.ts";
 
 export const ADVISOR_TOOL_NAME = "advisor";
 const CONTEXT_SNAPSHOT_STATE_TYPE = "context-snapshot-state";
@@ -51,10 +50,11 @@ const DEBUG = {
 	payloadSampleOnError: true,
 };
 
-export const ADVISOR_SYSTEM_PROMPT = readFileSync(
-	fileURLToPath(new URL("./prompts/advisor-system.txt", import.meta.url)),
-	"utf-8",
-).trimEnd();
+export const ADVISOR_SYSTEM_PROMPT = [
+	"You advise a coding agent. You see a short record of its work, not the full session.",
+	"Answer the brief and give one next step. Say why it is best and how the agent should check it. Point out weak claims and risks. If a key fact is missing, name what the agent should check.",
+	"Do not call tools or speak to the user. Use these headings: Next step, Why, Checks.",
+].join("\n\n");
 
 // ---------------------------------------------------------------------------
 // Runtime state (in-memory, globalThis-keyed to survive module re-import)
@@ -326,7 +326,7 @@ export interface AdvisorPayload {
 	stats: AdvisorPayloadStats;
 }
 
-export function buildAdvisorPayload(ctx: ExtensionContext, pi: ExtensionAPI): AdvisorPayload {
+export function buildAdvisorPayload(ctx: ExtensionContext, pi: ExtensionAPI, brief: string): AdvisorPayload {
 	const branch = ctx.sessionManager.getBranch();
 	const agentMessages = branch
 		.filter((e): e is SessionEntry & { type: "message" } => e.type === "message")
@@ -338,6 +338,8 @@ export function buildAdvisorPayload(ctx: ExtensionContext, pi: ExtensionAPI): Ad
 		[
 			"# Advisor consultation",
 			"Bounded diagnostic snapshot of the current work. Raw tool traffic, model thinking, large outputs, and older turns are omitted to control cost. Treat omissions as uncertainty: if a critical fact is missing, say exactly what to inspect next.",
+			"",
+			renderAdvisorBrief(brief),
 			"",
 			"## Runtime",
 			`cwd: ${ctx.cwd}`,
@@ -359,7 +361,7 @@ export function buildAdvisorPayload(ctx: ExtensionContext, pi: ExtensionAPI): Ad
 			recentConversation(ctx),
 			"",
 			"## What to return",
-			"Give one recommended next move with concise rationale and checks, using the required headings. If this snapshot is missing critical evidence, say exactly what the executor should inspect.",
+			"Answer the brief and give one next step with a short reason and checks, using the required headings. If this snapshot is missing a key fact, say exactly what the agent should check.",
 		].join("\n"),
 		PAYLOAD.maxTotalChars,
 	);
@@ -435,7 +437,6 @@ function writePayloadSample(callNumber: number, payload: string): string | undef
 export interface AdvisorDetails {
 	advisorModel?: string;
 	activeModel?: string;
-	classification?: string;
 	effort?: ThinkingLevel;
 	payloadChars?: number;
 	estimatedPayloadTokens?: number;
@@ -453,7 +454,7 @@ export interface AdvisorDetails {
 export interface RunAdvisorParams {
 	model: Model<Api>;
 	effort: ThinkingLevel | undefined;
-	classification: string;
+	brief: string;
 	signal?: AbortSignal;
 	onUpdate?: (partial: { content: Array<{ type: "text"; text: string }>; details?: AdvisorDetails }) => void;
 }
@@ -489,7 +490,6 @@ export async function runAdvisor(
 	const baseDetails = (): AdvisorDetails => ({
 		advisorModel: advisorLabel,
 		activeModel,
-		classification: params.classification,
 		effort: params.effort,
 		payloadChars,
 		estimatedPayloadTokens,
@@ -506,7 +506,6 @@ export async function runAdvisor(
 			cwd: ctx.cwd,
 			advisorModel: advisorLabel,
 			activeModel,
-			classification: params.classification,
 			effort: params.effort,
 			payloadChars,
 			estimatedPayloadTokens,
@@ -528,7 +527,7 @@ export async function runAdvisor(
 			return { content: [{ type: "text", text: `advisor failed: ${error}` }], details: { ...baseDetails(), errorMessage: error } };
 		}
 
-		const payload = buildAdvisorPayload(ctx, pi);
+		const payload = buildAdvisorPayload(ctx, pi, params.brief);
 		payloadText = payload.packetText;
 		payloadChars = payload.stats.chars;
 		estimatedPayloadTokens = payload.stats.approxTokens;

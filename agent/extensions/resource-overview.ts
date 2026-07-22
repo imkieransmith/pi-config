@@ -30,7 +30,7 @@ type CommandInfo = {
 const EXTENSION_MANIFEST: Record<string, { title: string; description: string }> = {
   "advisor": {
     title: "Advisor",
-    description: "Consult a configured reviewer model for a recommended next move on the current work.",
+    description: "Consult a fixed GPT-5.6-Sol reviewer for one recommended next move.",
   },
   "ask-user-question": {
     title: "Ask User Question",
