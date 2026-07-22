@@ -44,14 +44,24 @@ export function buildPathString(cwd: string, branch: string | null): string {
 
 // ── Context Usage ──────────────────────────────────────────────────────
 
+export function formatContextUsage(
+	pct: number | null,
+	win: number,
+	estimated = false,
+): string {
+	const percent = pct === null ? "?%" : `${estimated ? "~" : ""}${pct.toFixed(0)}%`;
+	return `${percent}/${fmtTokens(win)}`;
+}
+
 export function renderContextUsage(
-	pct: number,
+	pct: number | null,
 	win: number,
 	theme: { fg: (role: any, text: string) => string },
+	estimated = false,
 ): string {
-	const raw = `${pct.toFixed(0)}%/${fmtTokens(win)}`;
-	if (pct > 90) return theme.fg("error", raw);
-	if (pct > 70) return theme.fg("warning", raw);
+	const raw = formatContextUsage(pct, win, estimated);
+	if (pct !== null && pct > 90) return theme.fg("error", raw);
+	if (pct !== null && pct > 70) return theme.fg("warning", raw);
 	return theme.fg("success", raw);
 }
 

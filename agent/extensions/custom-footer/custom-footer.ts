@@ -1,12 +1,42 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	buildPathString,
-	fmtTokens,
+	formatContextUsage,
 	renderContextUsage,
 	renderModelInfo,
 	renderPath,
 } from "./renderers.js";
+
+interface ContextUsageDisplay {
+	percent: number | null;
+	contextWindow: number;
+	estimated: boolean;
+}
+
+function getContextUsageDisplay(ctx: ExtensionContext): ContextUsageDisplay {
+	const usage = ctx.getContextUsage();
+	const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+
+	if (usage?.percent !== null && usage?.percent !== undefined) {
+		return { percent: usage.percent, contextWindow, estimated: false };
+	}
+
+	if (contextWindow <= 0) {
+		return { percent: null, contextWindow, estimated: false };
+	}
+
+	const estimatedTokens = ctx.sessionManager
+		.buildSessionContext()
+		.messages
+		.reduce((total, message) => total + estimateTokens(message), 0);
+
+	return {
+		percent: (estimatedTokens / contextWindow) * 100,
+		contextWindow,
+		estimated: true,
+	};
+}
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
@@ -28,7 +58,7 @@ export default function (pi: ExtensionAPI) {
 	function renderLine1(
 		width: number,
 		theme: { fg: (role: any, text: string) => string; bold: (text: string) => string; inverse: (text: string) => string },
-		ctx: { cwd: string; getContextUsage(): { percent: number | null; contextWindow: number } | null | undefined; model: { provider?: string; id?: string; contextWindow?: number } | null | undefined },
+		ctx: ExtensionContext,
 		gitBranch: string | null,
 	): string {
 		const sep = theme.fg("dim", " │ ");
@@ -37,12 +67,16 @@ export default function (pi: ExtensionAPI) {
 		// Path + branch
 		const pathRaw = buildPathString(ctx.cwd, gitBranch);
 
-		// Context usage
-		const usage = ctx.getContextUsage();
-		const pct = usage?.percent ?? 0;
-		const win = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-		const ctxRaw = `${pct.toFixed(0)}%/${fmtTokens(win)}`;
-		const ctxColored = renderContextUsage(pct, win, theme);
+		// Context usage. Pi reports null immediately after compaction, so show
+		// its rebuilt-message estimate until provider usage is available again.
+		const usage = getContextUsageDisplay(ctx);
+		const ctxRaw = formatContextUsage(usage.percent, usage.contextWindow, usage.estimated);
+		const ctxColored = renderContextUsage(
+			usage.percent,
+			usage.contextWindow,
+			theme,
+			usage.estimated,
+		);
 
 		// Model + thinking
 		const provider = ctx.model?.provider || "unknown";

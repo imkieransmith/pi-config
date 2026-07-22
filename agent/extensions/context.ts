@@ -7,7 +7,6 @@
  * /context list - List durable summaries.
  * /context start [label] - Start a capture before substantial work. Only one capture can be active.
  * /context discard - Close the active capture without saving a durable summary.
- * /context compact - Ask Pi to compact now. Recent durable summaries are appended to the result.
  *
  * Agent tool equivalent: ContextSnapshot can start, finish, discard, inspect status, and list summaries.
  *
@@ -479,8 +478,7 @@ function formatCommandHelp(): string {
     "/context discard",
     "  Close the active capture without saving a durable summary.",
     "",
-    "/context compact",
-    "  Ask Pi to compact now. Recent durable ContextSnapshot summaries are appended to the result.",
+    "Pi's built-in /compact command and automatic compaction append recent durable summaries.",
     "",
     "Agent tool equivalent: ContextSnapshot can start, finish, discard, inspect status, and list summaries.",
   ].join("\n");
@@ -538,18 +536,6 @@ async function runCommand(
       return;
     }
 
-    if (action === "compact") {
-      const hasSummaries = stateFor(ctx).summaries.length > 0;
-      ctx.compact();
-      showCommandMessage(
-        pi,
-        hasSummaries
-          ? "compaction requested; recent ContextSnapshot summaries will be appended to the result"
-          : "compaction requested; no durable ContextSnapshot summaries yet",
-      );
-      return;
-    }
-
     showCommandMessage(
       pi,
       `Unknown /context action '${action}'.\n\n${formatCommandHelp()}`,
@@ -603,16 +589,6 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  pi.on("session_compact", async (_event, ctx) => {
-    const state = stateFor(ctx);
-    if (state.summaries.length === 0 || !ctx.hasUI) return;
-
-    ctx.ui.notify(
-      "context: recent durable summaries appended to the compaction result",
-      "info",
-    );
-  });
-
   // Change tracking
 
   pi.on("tool_call", async (event) => {
@@ -643,7 +619,6 @@ export default function (pi: ExtensionAPI) {
         { value: "list", description: "List durable summaries." },
         { value: "start", description: "Start a capture before substantial work." },
         { value: "discard", description: "Close the active capture without a durable summary." },
-        { value: "compact", description: "Request compaction and append recent durable summaries." },
       ];
       const normalized = (prefix ?? "").trim().toLowerCase();
       const items = options
