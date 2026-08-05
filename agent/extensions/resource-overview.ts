@@ -84,10 +84,6 @@ const EXTENSION_MANIFEST: Record<string, { title: string; description: string }>
     title: "Security Guard",
     description: "Confirms or blocks risky commands and sensitive file access.",
   },
-  "session-query.ts": {
-    title: "Session Query",
-    description: "Query previous sessions, including custom state and summaries.",
-  },
   "superset-hooks.ts": {
     title: "Superset Hooks",
     description: "Emit Superset lifecycle hooks so the host shows a working indicator.",
