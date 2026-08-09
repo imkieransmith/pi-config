@@ -12,26 +12,23 @@
  *     truncate, etc.) are owned by confirm-destructive.ts, which is
  *     git-recoverability aware. They are deliberately NOT duplicated here to
  *     avoid double prompts. Confirmations share a per-session allow-list via
- *     ./shared/confirm-gate.
+ *     ../shared/confirm-gate.
  *
  * Original - https://github.com/michalvavra/agents/blob/main/agents/pi/extensions/security.ts
  */
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { lstat, readlink, realpath } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { installSessionAllowReset, requestSessionConfirm } from "./shared/confirm-gate.js";
+import {
+  classifyResolvedPath as classifyResolvedPathPolicy,
+  resolveSecurityPath,
+  shouldBlockBroadPiDiscovery as shouldBlockBroadPiDiscoveryPolicy,
+  type PathIntent,
+  type SecurityDecision,
+} from "./policy.js";
+import { installSessionAllowReset, requestSessionConfirm } from "../shared/confirm-gate.js";
 
-type Decision = {
-  action: "allow" | "confirm" | "block";
-  reason?: string;
-  title?: string;
-  detail?: string;
-  /** Groups "allow for this session" decisions; only used for confirms. */
-  allowKey?: string;
-};
-
-type PathIntent = "read" | "mutate" | "discover";
+type Decision = SecurityDecision;
 
 type Rule = {
   pattern: RegExp;
@@ -117,43 +114,8 @@ function expandUserPath(filePath: string): string {
   return filePath;
 }
 
-/**
- * Canonicalize existing paths and the nearest existing parent of new paths.
- * This prevents a missing write target below a symlinked directory from looking
- * project-local while actually resolving somewhere else. Dangling symlinks are
- * followed explicitly because realpath() cannot resolve their missing target.
- */
-async function canonicalizeToolPath(resolved: string, symlinkDepth = 0): Promise<string> {
-  if (symlinkDepth > 40) throw new Error(`too many symbolic links while resolving ${resolved}`);
-
-  try {
-    return await realpath(resolved);
-  } catch {
-    let isSymbolicLink = false;
-    try {
-      isSymbolicLink = (await lstat(resolved)).isSymbolicLink();
-    } catch {
-      // The target does not exist (or cannot be inspected); canonicalize its parent below.
-    }
-
-    if (isSymbolicLink) {
-      const target = await readlink(resolved);
-      const targetPath = path.isAbsolute(target) ? target : path.resolve(path.dirname(resolved), target);
-      return canonicalizeToolPath(targetPath, symlinkDepth + 1);
-    }
-
-    const parent = path.dirname(resolved);
-    if (parent === resolved) return resolved;
-    const canonicalParent = await canonicalizeToolPath(parent, symlinkDepth);
-    return path.join(canonicalParent, path.basename(resolved));
-  }
-}
-
 async function resolveToolPath(rawPath: string, ctx: ExtensionContext): Promise<string> {
-  const withoutAt = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
-  const expanded = expandUserPath(withoutAt.trim() || ".");
-  const resolved = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(ctx.cwd, expanded);
-  return canonicalizeToolPath(resolved);
+  return resolveSecurityPath(rawPath, ctx.cwd);
 }
 
 /** Root-aware containment check; prefix checks are unsafe for sibling paths. */
@@ -200,26 +162,7 @@ function includesSensitiveSegment(absPath: string): string | undefined {
   return undefined;
 }
 
-/** Pi extensions are executable trust hooks, so project-local ones are protected. */
-function includesSensitiveProjectExtension(absPath: string, cwd: string): boolean {
-  return isInside(path.join(cwd, ".pi", "extensions"), absPath);
-}
-
-const PI_CLIPBOARD_IMAGE_NAME = /^pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpe?g|gif|webp)$/i;
-
-/** Pi writes pasted images under os.tmpdir() with a random UUID filename. */
-async function isPiClipboardImage(absPath: string): Promise<boolean> {
-  if (!PI_CLIPBOARD_IMAGE_NAME.test(path.basename(absPath))) return false;
-  const tempRoot = await canonicalizeToolPath(os.tmpdir());
-  return isInside(tempRoot, absPath);
-}
-
 type PiPathTier = "public" | "authoring" | "private" | "config" | "outside";
-
-/** Root-level planning notes are intentionally writable across projects. */
-function isPiPlanningNote(absPath: string, home: string): boolean {
-  return absPath === path.join(home, ".pi", "PLAN.md") || absPath === path.join(home, ".pi", "TODO.md");
-}
 
 // Maintainable metadata at the .pi repo root. These are tracked in git and are
 // part of working on this personal Pi config, so reads/discovery are safe.
@@ -256,10 +199,6 @@ function isPiPublicDirectory(absPath: string, home: string): boolean {
   return dirs.some((dir) => absPath === dir);
 }
 
-function isBroadPiDiscoveryPath(absPath: string, home: string): boolean {
-  return absPath === path.join(home, ".pi") || absPath === path.join(home, ".pi", "agent");
-}
-
 /** Skills and extensions are authoring surfaces. Mutations are allowed only after confirmation. */
 function isPiAuthoringPath(absPath: string, home: string): boolean {
   return (
@@ -289,6 +228,23 @@ function isPiPrivateConfigPath(absPath: string, home: string): boolean {
 
   const base = path.basename(absPath).toLowerCase();
   return /^(?:config|settings|models?|providers?|auth|credentials?)(?:\.|$)/i.test(base);
+}
+
+function isActivePiWorkspacePath(absPath: string, cwd: string, home: string): boolean {
+  const piRoot = path.join(home, ".pi");
+  return isInside(piRoot, cwd) && isInside(piRoot, absPath);
+}
+
+function isPiSettingsPath(absPath: string, home: string): boolean {
+  return absPath === path.join(home, ".pi", "agent", "settings.json");
+}
+
+function isPiModelsPath(absPath: string, home: string): boolean {
+  return absPath === path.join(home, ".pi", "agent", "models.json");
+}
+
+function isPiGeneratedModelStatePath(absPath: string, home: string): boolean {
+  return absPath === path.join(home, ".pi", "agent", "models-store.json");
 }
 
 function classifyPiPath(absPath: string, home: string): PiPathTier {
@@ -327,14 +283,26 @@ function shellFileReferences(command: string): string[] {
     .filter((word) => /(?:^|\/)[^\/]*\.[A-Za-z0-9][A-Za-z0-9_-]*$/.test(word));
 }
 
-function shellPiReferences(command: string): string[] {
-  const words = command.match(shellWordPattern) ?? [];
-  return words
-    .map(cleanShellWord)
-    .filter((word) => /(?:^|[\/])\.pi(?:[\/]|$)|^~\/\.pi(?:[\/]|$)/.test(word.replace(/\\/g, "/")));
+function shellPiReferences(command: string, cwd: string): string[] {
+  const words = (command.match(shellWordPattern) ?? []).map(cleanShellWord);
+  const refs = words.filter((word) =>
+    /(?:^|[\/])\.pi(?:[\/]|$)|^~\/\.pi(?:[\/]|$)/.test(word.replace(/\\/g, "/")),
+  );
+
+  const home = os.homedir();
+  const piRoot = path.join(home, ".pi");
+  if (isInside(piRoot, path.resolve(cwd))) {
+    for (const word of words) {
+      if (word.startsWith("-") || (!word.includes("/") && !/\.[A-Za-z0-9]/.test(word))) continue;
+      const candidate = path.resolve(cwd, expandUserPath(word));
+      if (isInside(piRoot, candidate)) refs.push(word);
+    }
+  }
+
+  return [...new Set(refs)];
 }
 
-function shellRefToApproxPath(word: string): string {
+function shellRefToApproxPath(word: string, cwd: string): string {
   const cleaned = expandUserPath(word).replace(/\\/g, path.sep);
   if (path.isAbsolute(cleaned)) return path.resolve(cleaned);
 
@@ -345,7 +313,7 @@ function shellRefToApproxPath(word: string): string {
     return path.join(os.homedir(), ".pi", ...parts);
   }
 
-  return path.resolve(cleaned);
+  return path.resolve(cwd, cleaned);
 }
 
 function shellWritesToPiReference(command: string): boolean {
@@ -353,19 +321,43 @@ function shellWritesToPiReference(command: string): boolean {
   return new RegExp(String.raw`(?:>>?\s*${piPath}|\b(?:tee|sponge|cp|mv|install)\b[^\n;|&]*${piPath})`, "i").test(command);
 }
 
-function classifyBashPiReferences(command: string): Decision {
-  const refs = shellPiReferences(command);
+function classifyBashPiReferences(command: string, cwd: string): Decision {
+  const refs = shellPiReferences(command, cwd);
   if (refs.length === 0) return ALLOW;
 
   const home = os.homedir();
   const writesToPi = shellWritesToPiReference(command);
   for (const ref of refs) {
-    const approxPath = shellRefToApproxPath(ref);
+    const approxPath = shellRefToApproxPath(ref, cwd);
     const sensitive = includesSensitiveSegment(approxPath);
     if (sensitive) return block(`bash touches protected path: ${sensitive}`, command);
 
+    if (isPiPrivateRuntimePath(approxPath, home)) {
+      return block("bash touches protected path: Pi private runtime state", command);
+    }
+    if (isPiGeneratedModelStatePath(approxPath, home)) {
+      return block("bash touches protected path: Pi generated model state", command);
+    }
+    if (isPiPrivateConfigPath(approxPath, home)) {
+      if (isActivePiWorkspacePath(approxPath, cwd, home) && isPiSettingsPath(approxPath, home)) {
+        continue;
+      }
+      if (isActivePiWorkspacePath(approxPath, cwd, home) && isPiModelsPath(approxPath, home)) {
+        return {
+          action: "confirm",
+          reason: "accessing Pi model configuration",
+          title: "Security check: access Pi model configuration?",
+          detail: command,
+          allowKey: "security:pi-model-config",
+        };
+      }
+      return block("bash touches protected path: Pi provider/model configuration", command);
+    }
+
     const tier = classifyPiPath(approxPath, home);
     if (tier === "outside") continue;
+    if (isActivePiWorkspacePath(approxPath, cwd, home) && !writesToPi) continue;
+    if (isActivePiWorkspacePath(approxPath, cwd, home) && tier === "authoring") continue;
     if (tier === "private") return block("bash touches protected path: Pi private runtime state", command);
     if (tier === "config") return block("bash touches protected path: Pi provider/model configuration", command);
     if (tier === "authoring" && writesToPi) return confirm("modify Pi authoring surface", command);
@@ -414,26 +406,6 @@ function shellRewriteTargetsOnlyTodo(command: string): boolean {
   return refs.some(isTodoPlanningNote) && refs.every(isTodoPlanningNote);
 }
 
-/** These files can turn later ordinary commands into arbitrary code execution. */
-function securitySensitiveMutation(absPath: string): string | undefined {
-  const base = path.basename(absPath);
-  const lower = absPath.toLowerCase();
-
-  if (base === "package.json") return "package.json";
-  if (/^(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|npm-shrinkwrap\.json)$/i.test(base)) return "lockfile";
-  if (/^\.(?:npmrc|yarnrc|pnpmrc)$|^\.pnpmfile\.cjs$/i.test(base)) return "package manager config";
-  if (/\.(?:sh|bash|zsh|fish|ps1|bat|cmd)$/i.test(base)) return "shell script";
-  if (/Dockerfile(?:\..*)?$/i.test(base) || /(?:^|\/)(?:docker-compose|compose)\.[^.]+$/i.test(absPath)) return "Docker config";
-  if (/\/\.(?:github|gitlab|circleci|buildkite|gitea|forgejo)\//i.test(lower)) return "CI config";
-  if (/\/\.husky\//i.test(lower) || /\/hooks\//i.test(lower)) return "hook file";
-  if (/^(?:vite|vitest|webpack|rollup|tsup|esbuild|babel|eslint|prettier|jest|playwright|turbo|nx)\.config\./i.test(base)) {
-    return "executable project config";
-  }
-  if (/^(?:Makefile|Justfile|Taskfile\.ya?ml)$/i.test(base)) return "project task file";
-
-  return undefined;
-}
-
 /** Search globs can target secrets even when the search root looks harmless. */
 function sensitiveFilePattern(value: string): string | undefined {
   const normalized = value.replace(/\\/g, "/");
@@ -451,7 +423,6 @@ function sensitiveFilePattern(value: string): string | undefined {
   return undefined;
 }
 
-/** Central path policy for built-in read, discovery, and mutation tools. */
 async function classifyPath(
   absPath: string,
   rawPath: string,
@@ -459,89 +430,7 @@ async function classifyPath(
   intent: PathIntent,
 ): Promise<Decision> {
   const cwd = await resolveToolPath(".", ctx);
-  const home = os.homedir();
-
-  if (isInside(path.join(home, ".ssh"), absPath)) {
-    return block(`${intent} of SSH secrets`, rawPath);
-  }
-  if (isInside(path.join(home, ".gnupg"), absPath)) {
-    return block(`${intent} of GnuPG secrets`, rawPath);
-  }
-
-  const sensitive = includesSensitiveSegment(absPath);
-  if (sensitive) {
-    return block(`${intent} of ${sensitive}`, rawPath);
-  }
-
-  if ((intent === "read" || intent === "mutate") && isPiPlanningNote(absPath, home)) {
-    return ALLOW;
-  }
-
-  const piTier = classifyPiPath(absPath, home);
-  if (piTier === "public") {
-    // Reads and discovery of the maintainable repo surface are always fine.
-    // Mutations fall through to the standard project-scope / sensitive-config
-    // confirmation checks below (e.g. editing package.json still confirms).
-    if (intent !== "mutate") return ALLOW;
-  }
-  if (piTier === "authoring") {
-    if (intent !== "mutate") return ALLOW;
-    return {
-      action: "confirm",
-      reason: "modifying Pi authoring surface",
-      title: "Security check: modify Pi authoring surface?",
-      detail: rawPath,
-      allowKey: "security:authoring-surface",
-    };
-  }
-  if (piTier === "private") {
-    return block(`${intent} of Pi private runtime state`, rawPath);
-  }
-  if (piTier === "config") {
-    return block(`${intent} of Pi provider/model configuration`, rawPath);
-  }
-  if (includesSensitiveProjectExtension(absPath, cwd)) {
-    if (intent !== "mutate") return ALLOW;
-    return block(`${intent} of Pi project extension`, rawPath);
-  }
-
-  // Pasted images are explicit user input. Allow only Pi's exact UUID-based
-  // filenames, only after canonicalization, and only for the read tool.
-  if (intent === "read" && await isPiClipboardImage(absPath)) return ALLOW;
-
-  if ((intent === "read" || intent === "discover") && !isInside(cwd, absPath)) {
-    const action = intent === "read" ? "read outside project" : "discover outside project";
-    return {
-      action: "confirm",
-      reason: action,
-      title: `Security check: ${action}?`,
-      detail: rawPath,
-      allowKey: `security:${action}`,
-    };
-  }
-
-  if (intent === "mutate" && !isInside(cwd, absPath)) {
-    return block("file mutation outside project", rawPath);
-  }
-
-  if (intent === "mutate" && pathSegments(absPath).includes("node_modules")) {
-    return block("file mutation inside node_modules", rawPath);
-  }
-
-  if (intent === "mutate") {
-    const soft = securitySensitiveMutation(absPath);
-    if (soft) {
-      return {
-        action: "confirm",
-        reason: `modifying ${soft}`,
-        title: `Security check: modify ${soft}?`,
-        detail: rawPath,
-        allowKey: `security:mutate:${soft}`,
-      };
-    }
-  }
-
-  return ALLOW;
+  return classifyResolvedPathPolicy(absPath, rawPath, cwd, os.homedir(), intent);
 }
 
 /** Construct a hard denial. */
@@ -562,14 +451,14 @@ function confirm(reason: string, detail: string): Decision {
 
 /** Bash is not parseable with regex, so this is conservative damage reduction. */
 // Exported for the de-dupe test harness; pi only invokes the default export.
-export function classifyBash(command: string): Decision {
+export function classifyBash(command: string, cwd = process.cwd()): Decision {
   const commandForRules = stripLiteralHeredocBodies(command);
 
   for (const rule of hardBashRules) {
     if (rule.pattern.test(commandForRules)) return block(rule.reason, commandForRules);
   }
 
-  const piDecision = classifyBashPiReferences(commandForRules);
+  const piDecision = classifyBashPiReferences(commandForRules, cwd);
   if (piDecision.action !== "allow") return piDecision;
 
   for (const rule of shellSecretPathRules) {
@@ -641,8 +530,10 @@ function formatSecurityStatus(): string {
     "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, cloud/CLI credential directories, credential dotfiles, private keys, and secret-like filenames",
     "- asks before built-in reads or discovery outside the current project, with allow-once and allow-for-session choices",
     "- allows read-only access to Pi-generated clipboard images in the canonical system temporary directory",
-    "- allows normal Pi repo docs and authoring reads, while blocking private Pi runtime state such as sessions, logs, caches, state, and debug payloads",
-    "- asks for confirmation before modifying Pi authoring surfaces such as personal extensions and skills",
+    "- allows read-only access to installed Pi README, docs, and examples paths",
+    "- treats an active ~/.pi workspace like a normal project for reads/discovery and allows changes to personal extensions, skills, and settings",
+    "- asks once per session before accessing ~/.pi/agent/models.json, while blocking auth, generated model state, sessions, logs, caches, state, and debug payloads",
+    "- asks before modifying Pi authoring surfaces when ~/.pi is not the active workspace",
     "- blocks file mutation outside the current project and inside node_modules",
     "- asks for confirmation before modifying executable project configuration such as package.json, lockfiles, shell scripts, CI config, and task files",
   ].join("\n");
@@ -682,7 +573,7 @@ export default function (pi: ExtensionAPI) {
     if (event.toolName === "bash") {
       // Bash is the broadest escape hatch, so it gets screened before everything else.
       const command = toolString(event.input, "command") ?? "";
-      return handleDecision(classifyBash(command), ctx);
+      return handleDecision(classifyBash(command, ctx.cwd), ctx);
     }
 
     if (event.toolName === "write" || event.toolName === "edit") {
@@ -710,7 +601,11 @@ export default function (pi: ExtensionAPI) {
       const pathDecision = await classifyPath(absPath, rawPath ?? ".", ctx, "discover");
       if (pathDecision.action !== "allow") return handleDecision(pathDecision, ctx);
 
-      if ((event.toolName === "grep" || event.toolName === "find") && isBroadPiDiscoveryPath(absPath, os.homedir())) {
+      const cwd = await resolveToolPath(".", ctx);
+      if (
+        (event.toolName === "grep" || event.toolName === "find") &&
+        shouldBlockBroadPiDiscoveryPolicy(event.toolName, absPath, cwd, os.homedir())
+      ) {
         return handleDecision(block(`broad ${event.toolName} of Pi repo; target ~/.pi/agent/extensions, ~/.pi/agent/skills, or a specific public file instead`, rawPath ?? "."), ctx);
       }
 
