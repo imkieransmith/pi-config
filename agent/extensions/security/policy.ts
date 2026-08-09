@@ -113,6 +113,14 @@ async function isPiClipboardImage(absPath: string): Promise<boolean> {
   return isInside(tempRoot, absPath);
 }
 
+let canonicalTmpRoot: Promise<string> | undefined;
+
+/** `/tmp` is a trusted model scratch area; canonicalization handles aliases such as `/private/tmp`. */
+async function isTrustedTemporaryPath(absPath: string): Promise<boolean> {
+  canonicalTmpRoot ??= canonicalizePath(path.resolve("/tmp"));
+  return isInside(await canonicalTmpRoot, absPath);
+}
+
 function isPiPlanningNote(absPath: string, home: string): boolean {
   return absPath === path.join(home, ".pi", "PLAN.md") || absPath === path.join(home, ".pi", "TODO.md");
 }
@@ -256,6 +264,10 @@ export async function classifyResolvedPath(
   home: string,
   intent: PathIntent,
 ): Promise<SecurityDecision> {
+  // resolveSecurityPath() canonicalizes the target first, so a symlink from
+  // /tmp to somewhere protected does not inherit temporary-directory trust.
+  if (await isTrustedTemporaryPath(absPath)) return ALLOW;
+
   if (isInside(path.join(home, ".ssh"), absPath)) return block(`${intent} of SSH secrets`, rawPath);
   if (isInside(path.join(home, ".gnupg"), absPath)) return block(`${intent} of GnuPG secrets`, rawPath);
 

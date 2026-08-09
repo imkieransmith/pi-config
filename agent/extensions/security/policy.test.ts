@@ -120,6 +120,48 @@ test("does not trust similarly named installed packages", async () => {
   assert.equal((await decide(collision, "read")).action, "confirm");
 });
 
+test("allows all built-in access under canonical /tmp", async () => {
+  const canonicalTmp = await resolveSecurityPath("/tmp", process.cwd());
+  const cases: Array<[string, PathIntent]> = [
+    [path.join(canonicalTmp, "model-output.txt"), "read"],
+    [path.join(canonicalTmp, "scratch"), "discover"],
+    [path.join(canonicalTmp, "new-artifact.json"), "mutate"],
+    [path.join(canonicalTmp, ".env"), "read"],
+    [path.join(canonicalTmp, "api-keys", "generated.key"), "mutate"],
+  ];
+
+  for (const [target, intent] of cases) {
+    assert.equal((await decide(target, intent)).action, "allow", `${intent} ${target}`);
+  }
+
+  const collision = path.join(`${canonicalTmp}-evil`, "artifact.txt");
+  assert.equal((await decide(collision, "read")).action, "confirm");
+  assert.equal((await decide(collision, "mutate")).action, "block");
+});
+
+test("canonical /tmp aliases are trusted but symlink escapes are not", async (t) => {
+  const lexicalTmp = await mkdtemp(path.join("/tmp", "pi-security-test-"));
+  t.after(async () => rm(lexicalTmp, { recursive: true, force: true }));
+
+  const canonicalTmp = await resolveSecurityPath("/tmp", process.cwd());
+  const canonicalArtifact = await resolveSecurityPath(path.join(lexicalTmp, "artifact.txt"), process.cwd());
+  assert.equal(canonicalArtifact, path.join(canonicalTmp, path.basename(lexicalTmp), "artifact.txt"));
+  assert.equal((await classifyResolvedPath(canonicalArtifact, canonicalArtifact, process.cwd(), os.homedir(), "mutate")).action, "allow");
+
+  const escape = path.join(lexicalTmp, "escape");
+  await symlink(path.join(os.homedir(), ".ssh"), escape);
+  const escaped = await resolveSecurityPath(path.join(escape, "not-created"), process.cwd());
+  const escapedDecision = await classifyResolvedPath(
+    escaped,
+    path.join(escape, "not-created"),
+    process.cwd(),
+    os.homedir(),
+    "read",
+  );
+  assert.equal(escapedDecision.action, "block");
+  assert.equal(escapedDecision.reason, "read of SSH secrets");
+});
+
 test("outside-workspace reads confirm and writes block", async () => {
   const outside = path.join(home, "other", "notes.txt");
   assert.equal((await decide(outside, "read")).action, "confirm");
