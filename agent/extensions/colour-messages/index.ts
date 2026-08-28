@@ -5,12 +5,12 @@
  * responses without overriding tool renderers such as tool-pills.
  */
 
-import { realpathSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Loader, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 type RenderablePrototype = {
 	render?: (width: number) => string[];
@@ -84,24 +84,24 @@ function patchRender(
 
 // ===========================================================================
 // MONKEY-PATCH (pi internals): this extension overrides the `render()` method on
-// pi's private message/loader components, and to reach those classes it imports
-// directly from pi's compiled `dist` directory. There is no public API for
-// per-row background colours, so this is a deliberate reach into internals.
+// pi's private message/loader components. The CLI bundles those classes into a
+// hashed chunk, so importing the unbundled files under `dist/modes` would patch
+// different class objects and have no effect. This extension reads the running
+// CLI's main-chunk import, then imports that same module instance.
 //
 // Fragility / maintenance — this WILL break if pi changes any of:
-//   - its dist layout or the entrypoint shape (resolvePiDistDir asserts the
-//     running CLI lives in `.../@earendil-works/pi-coding-agent/dist`),
-//   - the component file paths under modes/interactive/components/*.js,
-//   - the exported class names (UserMessageComponent, AssistantMessageComponent,
-//     ToolExecutionComponent) or their `render(width)` signature,
+//   - the `dist/bundle/cli.js` entrypoint shape,
+//   - the main chunk's exported class names (UserMessageComponent,
+//     AssistantMessageComponent, ToolExecutionComponent, BorderedLoader),
+//   - those classes' `render(width)` methods,
+//   - BorderedLoader's `loader` field used to reach the private Loader class,
 //   - AssistantMessageComponent's `hasToolCalls` field used to tell an
 //     intermediate working turn from a final response.
-// Failures are made loud on purpose: resolvePiDistDir throws with a diagnostic
-// path, and patchRender no-ops if a prototype has no `render`. Re-verify these
-// assumptions on every pi upgrade; a non-patching fix would require pi to expose
-// a public row-styling / render hook.
+// Failures are made loud on purpose. Re-verify these assumptions on every pi
+// upgrade; a non-patching fix would require pi to expose a public row-styling or
+// render hook.
 // ===========================================================================
-function resolvePiDistDir(): string {
+function resolvePiRuntimeModuleUrl(): string {
 	if (!process.argv[1]) {
 		throw new Error("Could not locate the running pi CLI entrypoint: process.argv[1] is empty");
 	}
@@ -110,19 +110,48 @@ function resolvePiDistDir(): string {
 	try {
 		cliPath = realpathSync(cliPath);
 	} catch {
-		// Keep the original path if realpath fails; dirname() below still gives a useful diagnostic.
+		// Keep the original path so the error below includes the path pi provided.
 	}
 
-	const distDir = dirname(cliPath);
-	if (basename(distDir) !== "dist" || !cliPath.includes("@earendil-works/pi-coding-agent")) {
-		throw new Error(`Could not locate pi dist directory from running entrypoint: ${cliPath}`);
+	const bundleDir = dirname(cliPath);
+	const distDir = dirname(bundleDir);
+	if (
+		basename(cliPath) !== "cli.js" ||
+		basename(bundleDir) !== "bundle" ||
+		basename(distDir) !== "dist" ||
+		!cliPath.includes("@earendil-works/pi-coding-agent")
+	) {
+		throw new Error(`Could not locate pi's bundled CLI from running entrypoint: ${cliPath}`);
 	}
 
-	return distDir;
+	const cliSource = readFileSync(cliPath, "utf8");
+	const mainChunkImport = cliSource.match(/import\{[^}]*\bmain\b[^}]*\}from"([^"]+)"/);
+	if (!mainChunkImport?.[1]) {
+		throw new Error(`Could not locate pi's main bundle chunk import in: ${cliPath}`);
+	}
+
+	return new URL(mainChunkImport[1], pathToFileURL(cliPath)).href;
 }
 
-async function importPiInternal<T = any>(distRelativePath: string): Promise<T> {
-	return import(pathToFileURL(join(resolvePiDistDir(), distRelativePath)).href) as Promise<T>;
+function resolveLoaderPrototype(
+	BorderedLoader: new (...args: any[]) => any,
+): RenderablePrototype & Record<PropertyKey, unknown> {
+	const probe = new BorderedLoader(
+		{ requestRender() {} },
+		{ fg: (_colour: string, text: string) => text },
+		"",
+		{ cancellable: false },
+	);
+
+	try {
+		const prototype = Object.getPrototypeOf(probe.loader) as RenderablePrototype & Record<PropertyKey, unknown>;
+		if (!prototype?.render) {
+			throw new Error("Could not locate pi's private Loader prototype through BorderedLoader");
+		}
+		return prototype;
+	} finally {
+		probe.dispose();
+	}
 }
 
 export default async function (_pi: ExtensionAPI) {
@@ -132,21 +161,18 @@ export default async function (_pi: ExtensionAPI) {
 		assistant: hexToBgAnsi(COLOURS.assistant),
 	};
 
-	const [{ UserMessageComponent }, { AssistantMessageComponent }, { ToolExecutionComponent }] = await Promise.all([
-		importPiInternal<{ UserMessageComponent: new (...args: any[]) => any }>(
-			"modes/interactive/components/user-message.js",
-		),
-		importPiInternal<{ AssistantMessageComponent: new (...args: any[]) => any }>(
-			"modes/interactive/components/assistant-message.js",
-		),
-		importPiInternal<{ ToolExecutionComponent: new (...args: any[]) => any }>(
-			"modes/interactive/components/tool-execution.js",
-		),
-	]);
+	const { UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent, BorderedLoader } = (await import(
+		resolvePiRuntimeModuleUrl()
+	)) as {
+		UserMessageComponent: new (...args: any[]) => any;
+		AssistantMessageComponent: new (...args: any[]) => any;
+		ToolExecutionComponent: new (...args: any[]) => any;
+		BorderedLoader: new (...args: any[]) => any;
+	};
 
 	patchRender(UserMessageComponent.prototype, "user", colours);
 	patchRender(ToolExecutionComponent.prototype, "work", colours);
-	patchRender(Loader.prototype, "work", colours);
+	patchRender(resolveLoaderPrototype(BorderedLoader), "work", colours);
 
 	// Assistant messages that include tool calls are intermediate working turns;
 	// final assistant responses have no tool calls and get the assistant colour.
