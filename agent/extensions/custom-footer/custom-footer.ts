@@ -1,4 +1,4 @@
-import { estimateTokens, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, estimateTokens, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	buildPathString,
@@ -26,9 +26,7 @@ function getContextUsageDisplay(ctx: ExtensionContext): ContextUsageDisplay {
 		return { percent: null, contextWindow, estimated: false };
 	}
 
-	const estimatedTokens = ctx.sessionManager
-		.buildSessionContext()
-		.messages
+	const estimatedTokens = buildSessionContext(ctx.sessionManager.getBranch()).messages
 		.reduce((total, message) => total + estimateTokens(message), 0);
 
 	return {
@@ -40,6 +38,7 @@ function getContextUsageDisplay(ctx: ExtensionContext): ContextUsageDisplay {
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
+		if (ctx.mode !== "tui") return;
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
 
@@ -47,19 +46,23 @@ export default function (pi: ExtensionAPI) {
 				dispose: unsubscribe,
 				invalidate() {},
 				render(width: number): string[] {
-					return [renderLine1(width, theme, ctx, footerData.getGitBranch())];
+					const statuses = [...footerData.getExtensionStatuses().values()]
+						.map(text => text.replace(/[\r\n\t]+/g, " ").trim())
+						.filter(text => visibleWidth(text) > 0);
+					return [renderLine(width, theme, ctx, footerData.getGitBranch(), statuses)];
 				},
 			};
 		});
 	});
 
-	// ── Line 1: Path │ Context │ Model ─────────────────────────────────
+	// ── One line: Path │ Context │ Model │ Optional status ────────────
 
-	function renderLine1(
+	function renderLine(
 		width: number,
 		theme: { fg: (role: any, text: string) => string; bold: (text: string) => string; inverse: (text: string) => string },
 		ctx: ExtensionContext,
 		gitBranch: string | null,
+		statuses: string[],
 	): string {
 		const sep = theme.fg("dim", " │ ");
 		const sepW = 3;
@@ -85,7 +88,8 @@ export default function (pi: ExtensionAPI) {
 		const modelInfo = renderModelInfo(modelName, provider, thinking, theme);
 
 		// Layout: compute path budget from remaining space
-		const rightBlockWidth = visibleWidth(ctxRaw) + sepW + modelInfo.rawWidth;
+		const rightBlockWidth = visibleWidth(ctxRaw) + sepW + modelInfo.rawWidth
+			+ statuses.reduce((total, text) => total + sepW + visibleWidth(text), 0);
 		const pathBudget = width - rightBlockWidth - sepW;
 		const pathDisplay = renderPath(pathRaw, pathBudget, theme);
 
@@ -93,7 +97,7 @@ export default function (pi: ExtensionAPI) {
 		const segments: string[] = [];
 		if (pathDisplay) segments.push(pathDisplay);
 		segments.push(ctxColored);
-		segments.push(modelInfo.text);
+		segments.push(modelInfo.text, ...statuses);
 
 		return truncateToWidth(segments.join(sep), width);
 	}

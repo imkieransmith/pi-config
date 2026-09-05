@@ -58,7 +58,7 @@ const SECRET_PATTERNS: SecretPattern[] = [
 	{
 		name: 'Generic Password Field',
 		pattern:
-			/\b(?:[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)|password|passwd|secret|token|api[_-]?key)\b[ \t]*[:=][ \t]*["']?[A-Za-z0-9._:/+=@!-]{8,}["']?/g,
+			/\b(?:[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)|password|passwd|secret|token|api[_-]?key)\b["']?[ \t]*[:=][ \t]*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[A-Za-z0-9._:/+=@!-]{8,})/gi,
 	},
 	{
 		name: 'Generic Secret Phrase',
@@ -176,8 +176,7 @@ function redact_secret_patterns(text: string): RedactionResult {
 		sp.pattern.lastIndex = 0;
 		result = result.replace(sp.pattern, (match) => {
 			count++;
-			const prefix = match.slice(0, 4);
-			return `${prefix}${'*'.repeat(Math.min(match.length - 4, 20))}[REDACTED:${sp.name}]`;
+			return `[REDACTED:${sp.name}]`;
 		});
 	}
 
@@ -227,38 +226,43 @@ export function redact_text(
 	return { redacted: result, count };
 }
 
-export default async function filter_output(pi: ExtensionAPI) {
-	let totalRedacted = 0;
+/** Redact strings and explicit secret fields in JSON-like tool details too. */
+export function redact_value(value: unknown, seen = new WeakMap<object, unknown>()): unknown {
+  if (typeof value === 'string') return redact_text(value).redacted;
+  if (!value || typeof value !== 'object') return value;
+  if ((value as { type?: unknown }).type === 'image') return value; // No OCR or binary-image redaction.
+  if (seen.has(value)) return seen.get(value);
+  if (Array.isArray(value)) {
+    const output: unknown[] = [];
+    seen.set(value, output);
+    for (const child of value) output.push(redact_value(child, seen));
+    return output;
+  }
+  const output: Record<string, unknown> = {};
+  seen.set(value, output);
+  for (const [key, child] of Object.entries(value)) {
+    output[key] = /^(?:password|passwd|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token)$/i.test(key) && typeof child === 'string'
+      ? '[REDACTED:Secret field]' : redact_value(child, seen);
+  }
+  return output;
+}
 
-	pi.on('tool_result', async (event) => {
-		if (!event.content) return;
-
-		const force_ssh_config = should_force_ssh_config_redaction(event);
-		let modified = false;
-
-		const newContent = event.content.map((item) => {
-			if (!is_text_content(item) || !item.text) return item;
-			const { redacted, count } = redact_text(item.text, {
-				force_ssh_config,
-			});
-			if (count > 0) {
-				modified = true;
-				totalRedacted += count;
-			}
-			return { ...item, text: redacted } satisfies TextContent;
-		});
-
-		if (modified) {
-			return { content: newContent };
-		}
-	});
-
-	pi.registerCommand('redact-stats', {
-		description: 'Show how many secrets have been redacted',
-		handler: async (_args, ctx) => {
-			ctx.ui.notify(
-				`Secrets redacted this session: ${totalRedacted}`,
-			);
-		},
-	});
+export default function filter_output(pi: ExtensionAPI) {
+  let totalRedacted = 0;
+  pi.on('session_start', () => { totalRedacted = 0; });
+  pi.on('tool_result', async event => {
+    const content = event.content.map(item => {
+      if (!is_text_content(item)) return item;
+      const result = redact_text(item.text, { force_ssh_config: should_force_ssh_config_redaction(event) });
+      totalRedacted += result.count;
+      return { ...item, text: result.redacted };
+    });
+    return { content, details: redact_value(event.details) };
+  });
+  pi.registerCommand('redact-stats', {
+    description: 'Show the count of redactions in final tool text (not detail-field redactions)',
+    handler: async (_args, ctx) => {
+      if (ctx.hasUI) ctx.ui.notify(`Additional final-hook redactions this session: ${totalRedacted} (built-in wrappers redact earlier)`);
+    },
+  });
 }

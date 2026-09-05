@@ -11,23 +11,22 @@ The code here is intended as a working personal config rather than a polished pa
 This repo is a personal Pi setup: agent-facing extensions, skills, and UI helpers that are loaded into Pi sessions.
 
 ### Extensions
-- **Advisor** (`advisor`) — One consultation tool with a required brief, a fixed GPT-5.6-Sol reviewer, and one usage policy. It receives a bounded snapshot of recent work; `/advisor status` and `/advisor debug` expose diagnostics.
-- **Ask User Question** (`ask-user-question`) — Interactive multiple-choice clarification tool for agents.
+- **Advisor** (`advisor`) — One consultation tool with a required brief, a fixed GPT-6-Astra reviewer, and one usage policy. It receives a bounded snapshot of recent work; `/advisor status` and `/advisor debug` expose diagnostics.
+- **Ask User Question** (`ask-user-question`) — TUI-only multiple-choice and free-text questions. Long headers are accepted and shortened for display.
 - **Colour Messages** (`colour-messages`) — Background colours for user, working, and final assistant rows.
 - **Confirm Destructive** (`confirm-destructive.ts`) — Confirm destructive tool calls and bash commands before they run.
 - **Context Snapshot** (`context/`) — Append-only durable work captures with a bounded, freshly replaced recent-summary appendix after Pi compacts.
-- **Custom Footer** (`custom-footer`) — Compact powerline-style footer with path, context, and model info.
+- **Custom Footer** (`custom-footer`) — One line with path, context and model info. Advisor status stays hidden unless unavailable; warnings appear inline.
 - **Evidence Store** (`evidence.ts`) — Validated durable snippets with deduplication, paginated discovery, exact final-citation verification, and TUI-only proof.
 - **Meep** (`meep.ts`) — Says meep when the model is done working.
-- **Plan Command** (`plan.ts`) — Deterministic `/plan` handoff that manages ContextSnapshot captures.
+- **Plan Command** (`plan.ts`) — `/plan <request>` expands the write-plan skill. The skill handles captures; the command never force-closes them.
 - **Redact Sensitive Data** (`redact.ts`) — Redact secrets from tool output.
-- **Resource Overview** (`resource-overview.ts`) — Richer startup overview for loaded skills and extensions.
+- **Resource Overview** (`resource-overview.ts`) — Startup overview of actual available commands, skills and active tools.
 - **Response Metrics** (`response-metrics.ts`) — Persistent TUI-only elapsed-time, tool-call, and input/output-token row beneath each completed response.
 - **RTK Rewrite** (`rtk.ts`) — Best-effort shell command optimization via `rtk rewrite`.
 - **Security Guard** (`security/`) — Confirms or blocks risky commands and sensitive file access.
-- **Session Query** (`session-query.ts`) — Query previous sessions, including custom state and summaries.
 - **Superset Hooks** (`superset-hooks.ts`) — Emit Superset lifecycle hooks so the host shows a working indicator.
-- **Tool Pills** (`tool-pills`) — Compact colored tool call/result rendering and syntax-highlighted diffs.
+- **Tool Pills** (`tool-pills`) — Compact tool rendering, native edit diffs and bounded write previews.
 
 ### Skills
 Skills live under `agent/skills/` and provide task-specific instructions that agents load on demand, such as evidence capture, web search/page reading, and structured planning.

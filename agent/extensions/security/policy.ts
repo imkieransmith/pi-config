@@ -82,7 +82,7 @@ export function includesSensitiveSegment(absPath: string): string | undefined {
 
   if (isEnvFile(base)) return "environment file";
   if (base === ".dev.vars" || base.startsWith(".dev.vars.")) return "dev vars file";
-  if (/^\.(?:npmrc|netrc|git-credentials)$/i.test(base)) return "credential file";
+  if (/^\.(?:npmrc|netrc|git-credentials|pypirc|pgpass|my\.cnf|boto|s3cfg)$/i.test(base)) return "credential file";
   if (/\.(?:pem|key)$/i.test(base)) return "private key file";
   if (/^(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)$/i.test(base)) return "SSH private key";
 
@@ -95,7 +95,7 @@ export function includesSensitiveSegment(absPath: string): string | undefined {
     if (segment === ".docker") return "Docker credentials";
     if (segment === ".config" && /^(?:gh|gcloud)$/i.test(segments[index + 1] ?? "")) return "CLI credentials";
     if (segment === ".git") return "git directory";
-    if (/(?:secret|credentials?|tokens?|api[-_]?keys?)/i.test(segment)) return "secret material";
+    if (/^\.?(?:secrets?|credentials?|api[-_]?keys?)(?:\.(?:json|ya?ml|toml|ini|txt))?$/i.test(segment)) return "secret material";
   }
 
   return undefined;
@@ -103,14 +103,6 @@ export function includesSensitiveSegment(absPath: string): string | undefined {
 
 function includesSensitiveProjectExtension(absPath: string, cwd: string): boolean {
   return isInside(path.join(cwd, ".pi", "extensions"), absPath);
-}
-
-const PI_CLIPBOARD_IMAGE_NAME = /^pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpe?g|gif|webp)$/i;
-
-async function isPiClipboardImage(absPath: string): Promise<boolean> {
-  if (!PI_CLIPBOARD_IMAGE_NAME.test(path.basename(absPath))) return false;
-  const tempRoot = await canonicalizePath(os.tmpdir());
-  return isInside(tempRoot, absPath);
 }
 
 let canonicalTmpRoot: Promise<string> | undefined;
@@ -152,10 +144,6 @@ function isPiPublicDirectory(absPath: string, home: string): boolean {
     path.join(home, ".pi", "agent", "extensions"),
   ];
   return dirs.some((dir) => absPath === dir);
-}
-
-function isBroadPiDiscoveryPath(absPath: string, home: string): boolean {
-  return absPath === path.join(home, ".pi") || absPath === path.join(home, ".pi", "agent");
 }
 
 export function isPiAuthoringPath(absPath: string, home: string): boolean {
@@ -201,22 +189,6 @@ export function isPiModelsPath(absPath: string, home: string): boolean {
   return absPath === path.join(home, ".pi", "agent", "models.json");
 }
 
-function isInstalledPiPublicPath(absPath: string): boolean {
-  const segments = pathSegments(absPath);
-  for (let index = 0; index <= segments.length - 3; index++) {
-    if (
-      segments[index] !== "node_modules" ||
-      segments[index + 1] !== "@earendil-works" ||
-      segments[index + 2] !== "pi-coding-agent"
-    ) continue;
-
-    const relative = segments.slice(index + 3);
-    if (relative.length === 1 && relative[0].toLowerCase() === "readme.md") return true;
-    if (relative[0] === "docs" || relative[0] === "examples") return true;
-  }
-  return false;
-}
-
 export function classifyPiPath(absPath: string, home: string): PiPathTier {
   const piRoot = path.join(home, ".pi");
   if (!isInside(piRoot, absPath)) return "outside";
@@ -224,20 +196,7 @@ export function classifyPiPath(absPath: string, home: string): PiPathTier {
   if (isPiGeneratedModelStatePath(absPath, home) || isPiPrivateConfigPath(absPath, home)) return "config";
   if (isPiAuthoringPath(absPath, home)) return "authoring";
   if (isPiRootPublicFile(absPath, home) || isPiPublicDirectory(absPath, home)) return "public";
-  return "private";
-}
-
-export function shouldBlockBroadPiDiscovery(
-  toolName: "grep" | "find",
-  absPath: string,
-  cwd: string,
-  home: string,
-): boolean {
-  if (!isBroadPiDiscoveryPath(absPath, home)) return false;
-  // find reveals only names and still respects the built-in ignore rules. A
-  // recursive grep reads file contents, so keep it away from auth/runtime
-  // descendants even while ~/.pi is the active workspace.
-  return toolName === "grep" || !isActivePiWorkspacePath(absPath, cwd, home);
+  return "public";
 }
 
 function securitySensitiveMutation(absPath: string): string | undefined {
@@ -317,19 +276,7 @@ export async function classifyResolvedPath(
     return block(`${intent} of Pi project extension`, rawPath);
   }
 
-  if (intent !== "mutate" && isInstalledPiPublicPath(absPath)) return ALLOW;
-  if (intent === "read" && await isPiClipboardImage(absPath)) return ALLOW;
-
-  if ((intent === "read" || intent === "discover") && !isInside(cwd, absPath)) {
-    const action = intent === "read" ? "read outside project" : "discover outside project";
-    return {
-      action: "confirm",
-      reason: action,
-      title: `Security check: ${action}?`,
-      detail: rawPath,
-      allowKey: `security:${action}`,
-    };
-  }
+  if (intent !== "mutate") return ALLOW;
 
   if (intent === "mutate" && !isInside(cwd, absPath)) return block("file mutation outside project", rawPath);
   if (intent === "mutate" && pathSegments(absPath).includes("node_modules")) return block("file mutation inside node_modules", rawPath);

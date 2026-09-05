@@ -84,34 +84,3 @@ export function renderModelInfo(
 
 	return { text, rawWidth };
 }
-
-// ── Usage Bars (Line 2) ───────────────────────────────────────────────
-
-export function clampPct(v: number): number {
-	return Math.max(0, Math.min(100, Math.round(v)));
-}
-
-type ThemeRole = "success" | "warning" | "error";
-function colorForPct(v: number): ThemeRole {
-	return v >= 90 ? "error" : v >= 70 ? "warning" : "success";
-}
-
-const BAR_WIDTH = 8;
-
-export function renderBar(
-	pct: number,
-	theme: { fg: (role: any, text: string) => string },
-): string {
-	const v = clampPct(pct);
-	const filled = Math.round((v / 100) * BAR_WIDTH);
-	return theme.fg(colorForPct(v), "█".repeat(filled))
-		+ theme.fg("dim", "░".repeat(BAR_WIDTH - filled));
-}
-
-export function renderPct(
-	pct: number,
-	theme: { fg: (role: any, text: string) => string },
-): string {
-	const v = clampPct(pct);
-	return theme.fg(colorForPct(v), `${v}%`.padStart(4));
-}

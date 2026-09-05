@@ -1,6 +1,7 @@
 import type { AgentToolResult, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { highlightCode, keyHint } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { redact_value } from "../redact.ts";
 import { pill } from "./pill.js";
 
 /** Max lines shown in collapsed (non-expanded) result view. */
@@ -53,6 +54,10 @@ export function wrapBasicTool(
 	pi.registerTool({
 		...orig,
 		parameters: { ...orig.parameters },
+    async execute(id, args, signal, _update, ctx) {
+      const result = await orig.execute(id, args, signal, undefined, ctx);
+      return { ...result, content: redact_value(result.content), details: redact_value(result.details) };
+    },
 		renderCall(args: any, theme: Theme, _ctx: any) {
 			return new Text(pill(name, theme) + " " + mkCallText(args, theme), 0, 0);
 		},

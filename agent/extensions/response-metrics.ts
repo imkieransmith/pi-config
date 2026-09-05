@@ -105,8 +105,15 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_end", async (event) => {
     if (!activeRun || !isAssistantMessage(event.message)) return;
     activeRun.assistantMessages += 1;
-    activeRun.inputTokens += event.message.usage.input;
+    activeRun.inputTokens += event.message.usage.input + event.message.usage.cacheRead + event.message.usage.cacheWrite;
     activeRun.outputTokens += event.message.usage.output;
+  });
+
+  pi.on("tool_execution_end", event => {
+    if (!activeRun || !event.result.usage) return;
+    const usage = event.result.usage;
+    activeRun.inputTokens += usage.input + usage.cacheRead + usage.cacheWrite;
+    activeRun.outputTokens += usage.output;
   });
 
   pi.on("agent_settled", async (_event, ctx) => {

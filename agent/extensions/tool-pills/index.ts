@@ -11,6 +11,7 @@ import {
 	createLsToolDefinition,
 	createReadToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { protectDiscovery } from "../security/search.ts";
 import { registerDiffTools } from "./diff-renderer.js";
 import { renderBashCall, renderBashResult, wrapBasicTool } from "./renderers.js";
 
@@ -20,7 +21,7 @@ export default function (pi: ExtensionAPI) {
 	const cwd = process.cwd();
 
 	// ls
-	wrapBasicTool(pi, createLsToolDefinition(cwd), "ls", (args, theme) =>
+	wrapBasicTool(pi, protectDiscovery(createLsToolDefinition(cwd)), "ls", (args, theme) =>
 		theme.fg("accent", args.path || "."),
 	);
 
@@ -37,14 +38,14 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// find
-	wrapBasicTool(pi, createFindToolDefinition(cwd), "find", (args, theme) => {
+	wrapBasicTool(pi, protectDiscovery(createFindToolDefinition(cwd)), "find", (args, theme) => {
 		let t = theme.fg("accent", `"${args.pattern}"`);
 		if (args.path) t += theme.fg("dim", ` in ${args.path}`);
 		return t;
 	});
 
 	// grep
-	wrapBasicTool(pi, createGrepToolDefinition(cwd), "grep", (args, theme) => {
+	wrapBasicTool(pi, protectDiscovery(createGrepToolDefinition(cwd)), "grep", (args, theme) => {
 		let t = theme.fg("accent", `"${args.pattern}"`);
 		if (args.path) t += theme.fg("dim", ` in ${args.path}`);
 		if (args.glob) t += theme.fg("dim", ` ${args.glob}`);

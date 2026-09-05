@@ -1,164 +1,62 @@
 /**
- * Pi extension that uses `rtk rewrite` to optimize shell commands.
- *
- * Original - https://github.com/sherif-fanous/pi-rtk
+ * Best-effort RTK output compression without changing the checked command's arguments.
+ * Based on https://github.com/sherif-fanous/pi-rtk
  */
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { renderBashCall, renderBashResult } from "./tool-pills/renderers.ts";
+import { redact_value } from "./redact.ts";
 
-import type { AgentToolResult, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import {
-  createBashTool,
-  createLocalBashOperations,
-  highlightCode,
-  keyHint,
-} from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
-import { execFileSync } from "node:child_process";
-
-const REWRITE_TIMEOUT_MS = 5000;
-const MESSAGE_CUSTOM_TYPE = "rtk-rewrite";
-const COLLAPSED_MAX_LINES = 15;
-
-type RewriteStats = {
-  attempts: number;
-  rewrites: number;
-  failures: number;
-  lastOriginal?: string;
-  lastRewritten?: string;
-};
-
-const rewriteCache = new Map<string, string | undefined>();
-const stats: RewriteStats = { attempts: 0, rewrites: 0, failures: 0 };
-
-function rtkRewriteCommand(command: string): string | undefined {
-  if (rewriteCache.has(command)) return rewriteCache.get(command);
-
-  stats.attempts++;
-  stats.lastOriginal = command;
-
-  try {
-    const rewritten = execFileSync("rtk", ["rewrite", command], {
-      encoding: "utf-8",
-      timeout: REWRITE_TIMEOUT_MS,
-    }).trimEnd();
-    const result = rewritten && rewritten !== command ? rewritten : undefined;
-    if (result) {
-      stats.rewrites++;
-      stats.lastRewritten = result;
-    }
-    rewriteCache.set(command, result);
-    return result;
-  } catch {
-    stats.failures++;
-    rewriteCache.set(command, undefined);
-    return undefined;
-  }
-}
-
-function formatStatus(): string {
-  return [
-    "rtk rewrite",
-    "status: active, best-effort",
-    `attempts: ${stats.attempts}`,
-    `rewrites: ${stats.rewrites}`,
-    `failures: ${stats.failures}`,
-    `cache entries: ${rewriteCache.size}`,
-    stats.lastOriginal ? `last original: ${stats.lastOriginal}` : undefined,
-    stats.lastRewritten ? `last rewritten: ${stats.lastRewritten}` : undefined,
-  ].filter(Boolean).join("\n");
-}
-
-function showCommandMessage(pi: ExtensionAPI, content: string): void {
-  pi.sendMessage({
-    customType: MESSAGE_CUSTOM_TYPE,
-    content,
-    display: true,
-    details: {},
-  }, { triggerTurn: false });
-}
-
-function bashPill(theme: Theme): string {
-  return theme.bold(theme.inverse(theme.fg("error", " bash ")));
-}
-
-function getText(result: AgentToolResult<unknown>): string | undefined {
-  const c = result.content.find((c) => c.type === "text");
-  return c?.type === "text" ? c.text : undefined;
-}
-
-function renderBashCall(args: any, theme: Theme): Text {
-  const cmd = args.command ?? "";
-  const highlighted = highlightCode(cmd, "bash").join("\n");
-  const isMultiLine = cmd.includes("\n") || cmd.length > 80;
-  if (isMultiLine) {
-    return new Text(`${bashPill(theme)}\n${highlighted}`, 0, 0);
-  }
-  return new Text(`${bashPill(theme)} ${highlighted}`, 0, 0);
-}
-
-function renderBashResult(result: AgentToolResult<unknown>, { expanded }: { expanded: boolean }, theme: Theme): Text {
-  const text = getText(result);
-  if (!text || !text.trim()) return new Text("", 0, 0);
-
-  const lines = text.split("\n");
-  if (expanded || lines.length <= COLLAPSED_MAX_LINES) {
-    return new Text(`\n${lines.map((l) => theme.fg("toolOutput", l)).join("\n")}`, 0, 0);
-  }
-
-  const hidden = lines.length - COLLAPSED_MAX_LINES;
-  const hint = theme.fg("dim", `... ${hidden} more lines (${keyHint("app.tools.expand", "to expand")})`);
-  const output = lines.slice(-COLLAPSED_MAX_LINES).map((l) => theme.fg("toolOutput", l)).join("\n");
-  return new Text(`\n${hint}\n${output}`, 0, 0);
-}
+const run = promisify(execFile);
+const CACHE_LIMIT = 256;
 
 export default function (pi: ExtensionAPI) {
-  const cwd = process.cwd();
-  const localBashOperations = createLocalBashOperations();
-
-  const bashTool = createBashTool(cwd, {
-    spawnHook: ({ command, cwd, env }) => {
-      return { command: rtkRewriteCommand(command) ?? command, cwd, env };
-    },
-  });
-
+  const cache = new Map<string, string>();
+  let attempts = 0, rewrites = 0;
+  async function rewrite(command: string, signal?: AbortSignal): Promise<string> {
+    // Shell composition and substitutions require a shell parser. Leave them untouched.
+    if (/[\n;&|`$()<>]/.test(command)) return command;
+    const cached = cache.get(command);
+    if (cached) return cached;
+    attempts++;
+    let result = command;
+    try {
+      const { stdout } = await run("rtk", ["rewrite", command], { timeout: 1500, maxBuffer: 64_000, signal });
+      const proposed = stdout.trimEnd();
+      // RTK may propose argument/subcommand changes. Accept only an exact prefix,
+      // so neither safety gate can approve one target and execute another.
+      if (proposed === `rtk ${command}`) { result = proposed; rewrites++; }
+    } catch { /* Unavailable/unsupported RTK leaves Bash usable. */ }
+    if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value!);
+    cache.set(command, result);
+    return result;
+  }
+  pi.on("session_start", () => { cache.clear(); attempts = 0; rewrites = 0; });
+  const tool = createBashToolDefinition(process.cwd());
   pi.registerTool({
-    ...bashTool,
-    parameters: { ...bashTool.parameters },
+    ...tool,
+    async execute(id, args, signal, _update, ctx) {
+      const command = await rewrite(args.command, signal);
+      // Withhold raw streaming text; final output is redacted before display/storage.
+      const result = await tool.execute(id, { ...args, command }, signal, undefined, ctx);
+      return { ...result, content: redact_value(result.content) as typeof result.content, details: redact_value(result.details) as typeof result.details };
+    },
     renderCall: renderBashCall,
     renderResult: renderBashResult,
   });
-
-  pi.on("user_bash", (event) => {
-    if (event.excludeFromContext) {
-      return;
-    }
-
-    const initialRewrite = rtkRewriteCommand(event.command);
-    if (!initialRewrite) {
-      return;
-    }
-
-    return {
-      operations: {
-        exec: (command, cwd, options) => {
-          return localBashOperations.exec(
-            command === event.command ? initialRewrite : rtkRewriteCommand(command) ?? command,
-            cwd,
-            options,
-          );
-        },
-      },
-    };
+  const local = createLocalBashOperations();
+  pi.on("user_bash", async event => {
+    if (event.excludeFromContext) return;
+    const command = await rewrite(event.command);
+    if (command === event.command) return;
+    return { operations: { exec: (original, cwd, options) => local.exec(original === event.command ? command : original, cwd, options) } };
   });
-
   pi.registerCommand("rtk", {
-    description: "Show rtk rewrite status.",
-    getArgumentCompletions: (prefix: string) => {
-      return "status".startsWith((prefix ?? "").trim().toLowerCase())
-        ? [{ value: "status", label: "status", description: "Show rewrite stats and last rewrite." }]
-        : null;
-    },
-    handler: async (_args: string) => {
-      showCommandMessage(pi, formatStatus());
+    description: "Show bounded RTK rewrite statistics",
+    handler: async (_args, ctx) => {
+      ctx.ui.notify(`RTK: ${rewrites}/${attempts} rewrites; ${cache.size}/${CACHE_LIMIT} cached. Only unchanged command/arguments with an RTK prefix are accepted.`, "info");
     },
   });
 }

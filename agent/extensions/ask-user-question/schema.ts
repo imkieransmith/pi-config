@@ -19,9 +19,8 @@ export const QuestionSchema = Type.Object({
     description: "Full question text displayed to the user",
   }),
   header: Type.String({
-    maxLength: 12,
     description:
-      "Short label used in the tab bar when multiple questions are shown. Max 12 characters.",
+      "Short tab label. The UI shortens long labels to fit.",
   }),
   options: Type.Array(OptionSchema, {
     minItems: 2,

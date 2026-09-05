@@ -9,19 +9,19 @@
  * (bounded project packet + debug logging) extensions.
  */
 
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, ImageContent, Message, Model, StopReason, TextContent, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
-import { completeSimple } from "@earendil-works/pi-ai";
 import {
 	convertToLlm,
+	getAgentDir,
 	type AgentToolResult,
 	type ExtensionAPI,
 	type ExtensionContext,
 	type SessionEntry,
 	type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
+import { redact_value } from "../redact.ts";
 import { renderAdvisorBrief } from "./brief.ts";
 
 export const ADVISOR_TOOL_NAME = "advisor";
@@ -43,11 +43,8 @@ const PAYLOAD = {
 };
 
 const DEBUG = {
-	enabled: true,
-	dir: join(homedir(), ".pi", "agent", "advisor"),
+	get dir() { return join(getAgentDir(), "advisor"); },
 	logFile: "debug.jsonl",
-	payloadSampleEvery: 5, // save every Nth payload for inspection; 0 disables
-	payloadSampleOnError: true,
 };
 
 export const ADVISOR_SYSTEM_PROMPT = [
@@ -64,7 +61,6 @@ interface RuntimeState {
 	attemptedCalls: number;
 	successfulCalls: number;
 	lastError?: string;
-	lastPayloadSamplePath?: string;
 	lastCallAt?: number;
 }
 
@@ -81,7 +77,6 @@ export function resetEngineState(): void {
 	s.attemptedCalls = 0;
 	s.successfulCalls = 0;
 	s.lastError = undefined;
-	s.lastPayloadSamplePath = undefined;
 	s.lastCallAt = undefined;
 }
 
@@ -384,7 +379,6 @@ export function buildAdvisorPayload(ctx: ExtensionContext, pi: ExtensionAPI, bri
 // ---------------------------------------------------------------------------
 
 function ensureDebugDir(): void {
-	if (!DEBUG.enabled) return;
 	try {
 		mkdirSync(DEBUG.dir, { recursive: true, mode: 0o700 });
 		chmodSync(DEBUG.dir, 0o700);
@@ -394,7 +388,6 @@ function ensureDebugDir(): void {
 }
 
 function appendDebug(record: Record<string, unknown>): void {
-	if (!DEBUG.enabled) return;
 	ensureDebugDir();
 	const file = debugLogPath();
 	try {
@@ -404,29 +397,11 @@ function appendDebug(record: Record<string, unknown>): void {
 		} catch {
 			// File may not exist yet.
 		}
-		appendFileSync(file, `${JSON.stringify(record)}\n`, { encoding: "utf-8", mode: 0o600 });
+		try { if (statSync(file).size > 128_000) writeFileSync(file, "", { mode: 0o600 }); } catch {}
+		appendFileSync(file, `${JSON.stringify(redact_value(record))}\n`, { encoding: "utf-8", mode: 0o600 });
 		chmodSync(file, 0o600);
 	} catch {
 		// debug logging must never break the tool
-	}
-}
-
-function shouldSavePayload(callNumber: number, success: boolean): boolean {
-	if (!DEBUG.enabled) return false;
-	if (!success && DEBUG.payloadSampleOnError) return true;
-	return DEBUG.payloadSampleEvery > 0 && callNumber % DEBUG.payloadSampleEvery === 0;
-}
-
-function writePayloadSample(callNumber: number, payload: string): string | undefined {
-	if (!DEBUG.enabled) return undefined;
-	ensureDebugDir();
-	const file = join(DEBUG.dir, `payload-${String(callNumber).padStart(4, "0")}-${Date.now()}.md`);
-	try {
-		writeFileSync(file, payload, { encoding: "utf-8", mode: 0o600, flag: "wx" });
-		state().lastPayloadSamplePath = file;
-		return file;
-	} catch {
-		return undefined;
 	}
 }
 
@@ -447,7 +422,6 @@ export interface AdvisorDetails {
 	errorMessage?: string;
 	latencyMs?: number;
 	debugLog?: string;
-	payloadSamplePath?: string;
 	callNumber?: number;
 }
 
@@ -456,7 +430,7 @@ export interface RunAdvisorParams {
 	effort: ThinkingLevel | undefined;
 	brief: string;
 	signal?: AbortSignal;
-	onUpdate?: (partial: { content: Array<{ type: "text"; text: string }>; details?: AdvisorDetails }) => void;
+	onUpdate?: (partial: { content: Array<{ type: "text"; text: string }>; details: AdvisorDetails }) => void;
 }
 
 function extractText(response: Message): string {
@@ -481,11 +455,9 @@ export async function runAdvisor(
 
 	const advisorLabel = modelKey(params.model) ?? `${params.model.provider}/${params.model.id}`;
 	const activeModel = modelKey(ctx.model) ?? "unknown";
-	let payloadText = "";
 	let payloadChars = 0;
 	let estimatedPayloadTokens = 0;
 	let imageCount = 0;
-	let payloadSamplePath: string | undefined;
 
 	const baseDetails = (): AdvisorDetails => ({
 		advisorModel: advisorLabel,
@@ -510,7 +482,6 @@ export async function runAdvisor(
 			payloadChars,
 			estimatedPayloadTokens,
 			imageCount,
-			payloadSamplePath,
 			latencyMs: Date.now() - started,
 			...record,
 		});
@@ -528,7 +499,6 @@ export async function runAdvisor(
 		}
 
 		const payload = buildAdvisorPayload(ctx, pi, params.brief);
-		payloadText = payload.packetText;
 		payloadChars = payload.stats.chars;
 		estimatedPayloadTokens = payload.stats.approxTokens;
 		imageCount = payload.stats.imageCount;
@@ -543,16 +513,17 @@ export async function runAdvisor(
 			details: baseDetails(),
 		});
 
-		const response = await completeSimple(
+		const provider = ctx.modelRegistry.getProvider(params.model.provider);
+		if (!provider) throw new Error(`Provider ${params.model.provider} is unavailable`);
+		const response = await provider.streamSimple(
 			params.model,
 			{ systemPrompt: ADVISOR_SYSTEM_PROMPT, messages: payload.messages, tools: [] },
-			{ apiKey: auth.apiKey, headers: auth.headers, signal: params.signal, reasoning: params.effort },
-		);
+			{ apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: params.signal, reasoning: params.effort },
+		).result();
 
 		const text = extractText(response);
 		const latencyMs = Date.now() - started;
 		const success = response.stopReason !== "error" && response.stopReason !== "aborted" && Boolean(text);
-		payloadSamplePath = shouldSavePayload(callNumber, success) ? writePayloadSample(callNumber, payloadText) : undefined;
 
 		if (!success) {
 			const error = response.stopReason === "aborted" ? "advisor call was aborted" : response.errorMessage || "advisor returned no text";
@@ -560,7 +531,8 @@ export async function runAdvisor(
 			finishDebug({ success: false, stopReason: response.stopReason, error, usage: response.usage, responseChars: text.length });
 			return {
 				content: [{ type: "text", text: `advisor failed: ${error}` }],
-				details: { ...baseDetails(), responseChars: text.length, usage: response.usage, stopReason: response.stopReason, errorMessage: error, latencyMs, payloadSamplePath },
+				usage: response.usage,
+			details: { ...baseDetails(), responseChars: text.length, usage: response.usage, stopReason: response.stopReason, errorMessage: error, latencyMs },
 			};
 		}
 
@@ -569,13 +541,13 @@ export async function runAdvisor(
 		finishDebug({ success: true, stopReason: response.stopReason, usage: response.usage, responseChars: text.length });
 		return {
 			content: [{ type: "text", text }],
-			details: { ...baseDetails(), responseChars: text.length, usage: response.usage, stopReason: response.stopReason, latencyMs, payloadSamplePath },
+			usage: response.usage,
+			details: { ...baseDetails(), responseChars: text.length, usage: response.usage, stopReason: response.stopReason, latencyMs },
 		};
 	} catch (err) {
 		const error = err instanceof Error ? err.message : String(err);
 		s.lastError = error;
-		payloadSamplePath = shouldSavePayload(callNumber, false) && payloadText ? writePayloadSample(callNumber, payloadText) : undefined;
 		finishDebug({ success: false, error });
-		return { content: [{ type: "text", text: `advisor threw: ${error}` }], details: { ...baseDetails(), errorMessage: error, payloadSamplePath } };
+		return { content: [{ type: "text", text: `advisor threw: ${error}` }], details: { ...baseDetails(), errorMessage: error } };
 	}
 }

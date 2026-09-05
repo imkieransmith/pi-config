@@ -6,7 +6,6 @@ import test from "node:test";
 import {
   classifyResolvedPath,
   resolveSecurityPath,
-  shouldBlockBroadPiDiscovery,
   type PathIntent,
 } from "./policy.ts";
 
@@ -78,9 +77,6 @@ test("uses root-aware workspace matching rather than prefix matching", async () 
   const collisionCwd = `${piRoot}-evil`;
   const settings = await decide(path.join(piRoot, "agent", "settings.json"), "read", collisionCwd);
   assert.equal(settings.action, "block");
-  assert.equal(shouldBlockBroadPiDiscovery("find", piRoot, collisionCwd, home), true);
-  assert.equal(shouldBlockBroadPiDiscovery("find", piRoot, activeCwd, home), false);
-  assert.equal(shouldBlockBroadPiDiscovery("grep", piRoot, activeCwd, home), true);
 });
 
 test("allows installed Pi documentation and examples read-only", async () => {
@@ -108,7 +104,7 @@ test("allows installed Pi documentation and examples read-only", async () => {
   }
 });
 
-test("does not trust similarly named installed packages", async () => {
+test("allows ordinary package reads but not mutations", async () => {
   const collision = path.join(
     home,
     "node_modules",
@@ -117,7 +113,7 @@ test("does not trust similarly named installed packages", async () => {
     "docs",
     "security.md",
   );
-  assert.equal((await decide(collision, "read")).action, "confirm");
+  assert.equal((await decide(collision, "read")).action, "allow");
 });
 
 test("allows all built-in access under canonical /tmp", async () => {
@@ -135,7 +131,7 @@ test("allows all built-in access under canonical /tmp", async () => {
   }
 
   const collision = path.join(`${canonicalTmp}-evil`, "artifact.txt");
-  assert.equal((await decide(collision, "read")).action, "confirm");
+  assert.equal((await decide(collision, "read")).action, "allow");
   assert.equal((await decide(collision, "mutate")).action, "block");
 });
 
@@ -162,10 +158,10 @@ test("canonical /tmp aliases are trusted but symlink escapes are not", async (t)
   assert.equal(escapedDecision.reason, "read of SSH secrets");
 });
 
-test("outside-workspace reads confirm and writes block", async () => {
+test("outside-workspace reads and discovery are quiet; writes still block", async () => {
   const outside = path.join(home, "other", "notes.txt");
-  assert.equal((await decide(outside, "read")).action, "confirm");
-  assert.equal((await decide(outside, "discover")).action, "confirm");
+  assert.equal((await decide(outside, "read")).action, "allow");
+  assert.equal((await decide(outside, "discover")).action, "allow");
   assert.equal((await decide(outside, "mutate")).action, "block");
 });
 

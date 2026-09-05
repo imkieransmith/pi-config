@@ -2,7 +2,7 @@
  * Block dangerous commands, protect sensitive paths.
  *
  * Ownership boundary (see also confirm-destructive.ts):
- *   - This extension is the SECURITY boundary: hard blocks for forbidden/
+ *   - This extension is an accident-prevention policy, not shell isolation: hard blocks for forbidden/
  *     dangerous actions (privilege escalation, disk/device destruction, remote
  *     script execution, secret exfiltration), secret-path protection, the
  *     Pi-internal tier system, read/discovery gating, and outside-project
@@ -22,7 +22,9 @@ import * as path from "node:path";
 import {
   classifyResolvedPath as classifyResolvedPathPolicy,
   resolveSecurityPath,
-  shouldBlockBroadPiDiscovery as shouldBlockBroadPiDiscoveryPolicy,
+  expandUserPath, isInside, includesSensitiveSegment, classifyPiPath,
+  isPiPrivateRuntimePath, isPiPrivateConfigPath, isPiGeneratedModelStatePath,
+  isActivePiWorkspacePath, isPiSettingsPath, isPiModelsPath,
   type PathIntent,
   type SecurityDecision,
 } from "./policy.js";
@@ -91,11 +93,11 @@ const shellSecretPathRules: Rule[] = [
   { pattern: /(?:^|[\/\s"'`=:@])\.gnupg(?:\/|$|\s)/i, reason: "GnuPG directory" },
   { pattern: /(?:^|[\/\s"'`=:@])\.(?:aws|kube|docker)(?:\/|$|\s)/i, reason: "cloud or container credentials" },
   { pattern: /(?:^|[\/\s"'`=:@])\.config\/(?:gh|gcloud)(?:\/|$|\s)/i, reason: "CLI credentials" },
-  { pattern: /(?:^|[\/\s"'`=:@])\.(?:npmrc|netrc|git-credentials)(?:$|[\/\s"'`<>|&;])/i, reason: "credential file" },
+  { pattern: /(?:^|[\/\s"'`=:@])\.(?:npmrc|netrc|git-credentials|pypirc|pgpass|my\.cnf|boto|s3cfg)(?:$|[\/\s"'`<>|&;])/i, reason: "credential file" },
   { pattern: /(?:^|[\/\s"'`=:@])\.git(?:\/|$|\s)/i, reason: "git internals" },
   { pattern: /\b(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)\b/i, reason: "SSH private key" },
   { pattern: /[^\s"'`]+\.(?:pem|key)(?:$|[\s"'`<>|&;])/i, reason: "private key file" },
-  { pattern: /\b(?:secret|secrets|credentials?|tokens?|api[_-]?keys?)\b/i, reason: "secret material" },
+
 ];
 
 const sensitiveReadCommands = /\b(?:cat|sed|awk|grep|rg|find|fd|ls|tree|head|tail|less|more|nl|strings|xxd|od|cp|mv|install|tee|sponge|tar|zip|gzip|base64|openssl|curl|rsync|scp|python3?|node|ruby|perl|php)\b/i;
@@ -107,154 +109,8 @@ function notify(ctx: ExtensionContext, message: string): void {
   if (ctx.hasUI) ctx.ui.notify(message, "warning");
 }
 
-/** Treat common user-facing path syntax as real filesystem paths. */
-function expandUserPath(filePath: string): string {
-  if (filePath === "~") return os.homedir();
-  if (filePath.startsWith("~/")) return path.join(os.homedir(), filePath.slice(2));
-  return filePath;
-}
-
 async function resolveToolPath(rawPath: string, ctx: ExtensionContext): Promise<string> {
   return resolveSecurityPath(rawPath, ctx.cwd);
-}
-
-/** Root-aware containment check; prefix checks are unsafe for sibling paths. */
-function isInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-/** Path segments avoid matching accidental substrings across directory boundaries. */
-function pathSegments(filePath: string): string[] {
-  return filePath.split(path.sep).filter(Boolean);
-}
-
-/** Environment variants are sensitive, but examples are meant to be shared. */
-function isEnvFile(name: string): boolean {
-  return name === ".env" || (name.startsWith(".env.") && name !== ".env.example");
-}
-
-/** Names alone often reveal secret intent even before a file exists. */
-function includesSensitiveSegment(absPath: string): string | undefined {
-  const segments = pathSegments(absPath);
-  const base = path.basename(absPath);
-
-  if (isEnvFile(base)) return "environment file";
-  if (base === ".dev.vars" || base.startsWith(".dev.vars.")) return "dev vars file";
-  if (/^\.(?:npmrc|netrc|git-credentials)$/i.test(base)) return "credential file";
-  if (/\.(?:pem|key)$/i.test(base)) return "private key file";
-  if (/^(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)$/i.test(base)) return "SSH private key";
-
-  for (let index = 0; index < segments.length; index++) {
-    const segment = segments[index];
-    if (segment === ".ssh") return "SSH directory";
-    if (segment === ".gnupg") return "GnuPG directory";
-    if (segment === ".aws") return "AWS credentials";
-    if (segment === ".kube") return "Kubernetes credentials";
-    if (segment === ".docker") return "Docker credentials";
-    if (segment === ".config" && /^(?:gh|gcloud)$/i.test(segments[index + 1] ?? "")) return "CLI credentials";
-    if (segment === ".git") return "git directory";
-    if (/(?:secret|credentials?|tokens?|api[-_]?keys?)/i.test(segment)) {
-      return "secret material";
-    }
-  }
-
-  return undefined;
-}
-
-type PiPathTier = "public" | "authoring" | "private" | "config" | "outside";
-
-// Maintainable metadata at the .pi repo root. These are tracked in git and are
-// part of working on this personal Pi config, so reads/discovery are safe.
-// Genuinely sensitive runtime config (settings/auth/models/providers .json) is
-// deliberately NOT listed here — it stays in the private/config tiers below.
-const PI_ROOT_PUBLIC_FILES = new Set([
-  ".gitignore",
-  "license",
-  "license.md",
-  "license.txt",
-  "package.json",
-  "package-lock.json",
-  "append_system.md",
-  "tsconfig.json",
-]);
-
-/** Root-level docs/metadata describe this personal Pi repo and are safe to maintain. */
-function isPiRootPublicFile(absPath: string, home: string): boolean {
-  const piRoot = path.join(home, ".pi");
-  if (path.dirname(absPath) !== piRoot) return false;
-  const base = path.basename(absPath);
-  if (/^(?:README(?:\.[\w-]+)?|TODO|PLAN)\.md$/i.test(base)) return true;
-  return PI_ROOT_PUBLIC_FILES.has(base.toLowerCase());
-}
-
-/** A small amount of directory discovery is needed to work on the personal Pi repo. */
-function isPiPublicDirectory(absPath: string, home: string): boolean {
-  const dirs = [
-    path.join(home, ".pi"),
-    path.join(home, ".pi", "agent"),
-    path.join(home, ".pi", "agent", "skills"),
-    path.join(home, ".pi", "agent", "extensions"),
-  ];
-  return dirs.some((dir) => absPath === dir);
-}
-
-/** Skills and extensions are authoring surfaces. Mutations are allowed only after confirmation. */
-function isPiAuthoringPath(absPath: string, home: string): boolean {
-  return (
-    isInside(path.join(home, ".pi", "agent", "skills"), absPath) ||
-    isInside(path.join(home, ".pi", "agent", "extensions"), absPath)
-  );
-}
-
-/** Runtime/private Pi state can contain transcripts, payloads, logs, cache, or saved snippets. */
-function isPiPrivateRuntimePath(absPath: string, home: string): boolean {
-  return [
-    path.join(home, ".pi", "agent", "sessions"),
-    path.join(home, ".pi", "agent", "history"),
-    path.join(home, ".pi", "agent", "cache"),
-    path.join(home, ".pi", "agent", "logs"),
-    path.join(home, ".pi", "agent", "state"),
-    path.join(home, ".pi", "agent", "tmp"),
-    path.join(home, ".pi", "agent", "evidence"),
-    path.join(home, ".pi", "agent", "advisor"),
-  ].some((dir) => isInside(dir, absPath));
-}
-
-/** Config-looking files outside authoring dirs may include provider/model/auth settings. */
-function isPiPrivateConfigPath(absPath: string, home: string): boolean {
-  if (!isInside(path.join(home, ".pi"), absPath)) return false;
-  if (isPiAuthoringPath(absPath, home) || isPiRootPublicFile(absPath, home)) return false;
-
-  const base = path.basename(absPath).toLowerCase();
-  return /^(?:config|settings|models?|providers?|auth|credentials?)(?:\.|$)/i.test(base);
-}
-
-function isActivePiWorkspacePath(absPath: string, cwd: string, home: string): boolean {
-  const piRoot = path.join(home, ".pi");
-  return isInside(piRoot, cwd) && isInside(piRoot, absPath);
-}
-
-function isPiSettingsPath(absPath: string, home: string): boolean {
-  return absPath === path.join(home, ".pi", "agent", "settings.json");
-}
-
-function isPiModelsPath(absPath: string, home: string): boolean {
-  return absPath === path.join(home, ".pi", "agent", "models.json");
-}
-
-function isPiGeneratedModelStatePath(absPath: string, home: string): boolean {
-  return absPath === path.join(home, ".pi", "agent", "models-store.json");
-}
-
-function classifyPiPath(absPath: string, home: string): PiPathTier {
-  const piRoot = path.join(home, ".pi");
-  if (!isInside(piRoot, absPath)) return "outside";
-  if (isPiPrivateRuntimePath(absPath, home)) return "private";
-  if (isPiPrivateConfigPath(absPath, home)) return "config";
-  if (isPiAuthoringPath(absPath, home)) return "authoring";
-  if (isPiRootPublicFile(absPath, home) || isPiPublicDirectory(absPath, home)) return "public";
-  return "private";
 }
 
 /** TODO.md files are AI scratchpads; path policy still applies before any Bash rewrite exemption. */
@@ -414,11 +270,11 @@ function sensitiveFilePattern(value: string): string | undefined {
   if (/(^|\/)\.dev\.vars[^/]*/i.test(normalized)) return "dev vars file";
   if (/(^|\/)\.(?:ssh|gnupg|aws|kube|docker|git)(?:$|\/)/i.test(normalized)) return "sensitive directory";
   if (/(^|\/)\.config\/(?:gh|gcloud)(?:$|\/)/i.test(normalized)) return "CLI credentials";
-  if (/(^|\/)\.(?:npmrc|netrc|git-credentials)(?:$|\/)/i.test(normalized)) return "credential file";
+  if (/(^|\/)\.(?:npmrc|netrc|git-credentials|pypirc|pgpass|my\.cnf|boto|s3cfg)(?:$|\/)/i.test(normalized)) return "credential file";
   if (/(^|\/)\.pi\/agent\/(?:sessions|history|cache|logs|state|tmp|evidence|advisor)(?:$|\/)/i.test(normalized)) return "Pi private runtime state";
   if (/\.(?:pem|key)(?:$|[^\w])/i.test(normalized)) return "private key file";
   if (/\b(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)\b/i.test(normalized)) return "SSH private key";
-  if (/(?:secret|credentials?|tokens?|api[_-]?keys?)/i.test(normalized)) return "secret material";
+  if (/(?:^|\/)(?:secrets?|credentials?|api[_-]?keys?)(?:\.(?:json|ya?ml|toml|ini|txt))?$/i.test(normalized)) return "secret material";
 
   return undefined;
 }
@@ -452,7 +308,9 @@ function confirm(reason: string, detail: string): Decision {
 /** Bash is not parseable with regex, so this is conservative damage reduction. */
 // Exported for the de-dupe test harness; pi only invokes the default export.
 export function classifyBash(command: string, cwd = process.cwd()): Decision {
-  const commandForRules = stripLiteralHeredocBodies(command);
+  const commandForRules = stripLiteralHeredocBodies(command).replace(
+    /(?:-not|!)\s+-(?:path|name)\s+(?:"[^"$`]*"|'[^']*'|[^\s;&|$`]+)/g, ""
+  ).replace(/(?:--glob|-g)\s+(?:"![^"$`]*"|'![^']*'|![^\s;&|$`]+)/g, "");
 
   for (const rule of hardBashRules) {
     if (rule.pattern.test(commandForRules)) return block(rule.reason, commandForRules);
@@ -460,6 +318,13 @@ export function classifyBash(command: string, cwd = process.cwd()): Decision {
 
   const piDecision = classifyBashPiReferences(commandForRules, cwd);
   if (piDecision.action !== "allow") return piDecision;
+
+  if (sensitiveReadCommands.test(commandForRules) || shellWriteOperators.test(commandForRules)) {
+    for (const ref of shellFileReferences(commandForRules)) {
+      const sensitive = includesSensitiveSegment(ref);
+      if (sensitive) return block(`bash touches protected path: ${sensitive}`, commandForRules);
+    }
+  }
 
   for (const rule of shellSecretPathRules) {
     if (rule.pattern.test(commandForRules) && (sensitiveReadCommands.test(commandForRules) || shellWriteOperators.test(commandForRules))) {
@@ -522,16 +387,14 @@ const MESSAGE_CUSTOM_TYPE = "security-status";
 function formatSecurityStatus(): string {
   return [
     "Security extension",
-    "status: active",
+    "status: active (accident prevention, not a shell/filesystem sandbox)",
     "protects:",
     "- blocks high-risk bash patterns such as privilege escalation, destructive disk commands, remote script execution, environment disclosure, and secret exfiltration patterns",
     "- confirms package manager, container, network fetch, in-place rewrite, and project script commands when an interactive UI is available (with an 'allow for this session' option)",
     "- defers file/git data-loss prompts (rm, git reset --hard, git clean, find -delete, truncate) to the confirm-destructive extension to avoid double prompts",
-    "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, cloud/CLI credential directories, credential dotfiles, private keys, and secret-like filenames",
-    "- asks before built-in reads or discovery outside the current project, with allow-once and allow-for-session choices",
+    "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, cloud/CLI credential directories, credential dotfiles, private keys, and known credential filenames",
+    "- allows ordinary reads and discovery anywhere without prompts; protected descendants are removed from built-in search results",
     "- allows built-in reads, discovery, and mutations anywhere under canonical /tmp without confirmation; symlink escapes are still classified by their real destination",
-    "- allows read-only access to Pi-generated clipboard images elsewhere in the canonical system temporary directory",
-    "- allows read-only access to installed Pi README, docs, and examples paths",
     "- treats an active ~/.pi workspace like a normal project for reads/discovery and allows changes to personal extensions, skills, and settings",
     "- asks once per session before accessing ~/.pi/agent/models.json, while blocking auth, generated model state, sessions, logs, caches, state, and debug payloads",
     "- asks before modifying Pi authoring surfaces when ~/.pi is not the active workspace",
@@ -571,58 +434,54 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName === "bash") {
-      // Bash is the broadest escape hatch, so it gets screened before everything else.
-      const command = toolString(event.input, "command") ?? "";
-      return handleDecision(classifyBash(command, ctx.cwd), ctx);
-    }
-
-    if (event.toolName === "write" || event.toolName === "edit") {
-      // Mutations are limited to safe project files unless the user explicitly confirms risk.
-      const rawPath = toolPath(event.input);
-      if (!rawPath) return handleDecision(block("missing file path"), ctx);
-
-      const absPath = await resolveToolPath(rawPath, ctx);
-      return handleDecision(await classifyPath(absPath, rawPath, ctx, "mutate"), ctx);
-    }
-
-    if (event.toolName === "read") {
-      // Secret reads are as dangerous as secret writes because outputs enter model context.
-      const rawPath = toolPath(event.input);
-      if (!rawPath) return handleDecision(block("missing file path"), ctx);
-
-      const absPath = await resolveToolPath(rawPath, ctx);
-      return handleDecision(await classifyPath(absPath, rawPath, ctx, "read"), ctx);
-    }
-
-    if (event.toolName === "grep" || event.toolName === "find" || event.toolName === "ls") {
-      // Discovery tools can leak filenames or contents from places the model should not inspect.
-      const rawPath = toolPath(event.input, ".");
-      const absPath = await resolveToolPath(rawPath ?? ".", ctx);
-      const pathDecision = await classifyPath(absPath, rawPath ?? ".", ctx, "discover");
-      if (pathDecision.action !== "allow") return handleDecision(pathDecision, ctx);
-
-      const cwd = await resolveToolPath(".", ctx);
-      if (
-        (event.toolName === "grep" || event.toolName === "find") &&
-        shouldBlockBroadPiDiscoveryPolicy(event.toolName, absPath, cwd, os.homedir())
-      ) {
-        return handleDecision(block(`broad ${event.toolName} of Pi repo; target ~/.pi/agent/extensions, ~/.pi/agent/skills, or a specific public file instead`, rawPath ?? "."), ctx);
+    try {
+      if (event.toolName === "bash") {
+        // Bash is the broadest escape hatch, so it gets screened before everything else.
+        const command = toolString(event.input, "command") ?? "";
+        return handleDecision(classifyBash(command, ctx.cwd), ctx);
       }
 
-      const searchTarget = event.toolName === "grep"
-        ? toolString(event.input, "glob")
-        : event.toolName === "find"
-          ? toolString(event.input, "pattern")
-          : undefined;
-      const sensitive = searchTarget ? sensitiveFilePattern(searchTarget) : undefined;
-      if (sensitive) {
-        return handleDecision(block(`discover of ${sensitive}`, searchTarget), ctx);
+      if (event.toolName === "write" || event.toolName === "edit") {
+        // Mutations are limited to safe project files unless the user explicitly confirms risk.
+        const rawPath = toolPath(event.input);
+        if (!rawPath) return handleDecision(block("missing file path"), ctx);
+
+        const absPath = await resolveToolPath(rawPath, ctx);
+        return handleDecision(await classifyPath(absPath, rawPath, ctx, "mutate"), ctx);
+      }
+
+      if (event.toolName === "read") {
+        // Secret reads are as dangerous as secret writes because outputs enter model context.
+        const rawPath = toolPath(event.input);
+        if (!rawPath) return handleDecision(block("missing file path"), ctx);
+
+        const absPath = await resolveToolPath(rawPath, ctx);
+        return handleDecision(await classifyPath(absPath, rawPath, ctx, "read"), ctx);
+      }
+
+      if (event.toolName === "grep" || event.toolName === "find" || event.toolName === "ls") {
+        // Discovery tools can leak filenames or contents from places the model should not inspect.
+        const rawPath = toolPath(event.input, ".");
+        const absPath = await resolveToolPath(rawPath ?? ".", ctx);
+        const pathDecision = await classifyPath(absPath, rawPath ?? ".", ctx, "discover");
+        if (pathDecision.action !== "allow") return handleDecision(pathDecision, ctx);
+
+        const searchTarget = event.toolName === "grep"
+          ? toolString(event.input, "glob")
+          : event.toolName === "find"
+            ? toolString(event.input, "pattern")
+            : undefined;
+        const sensitive = searchTarget ? sensitiveFilePattern(searchTarget) : undefined;
+        if (sensitive) {
+          return handleDecision(block(`discover of ${sensitive}`, searchTarget), ctx);
+        }
+
+        return undefined;
       }
 
       return undefined;
+    } catch {
+      return { block: true, reason: "Security could not verify this tool call; no action was allowed" };
     }
-
-    return undefined;
   });
 }

@@ -27,7 +27,6 @@ const COLOURS: Record<PaintMode, string> = {
 	assistant: "#e8f7ed",
 };
 
-const CSI_BG_RE = /\x1b\[(?:48;2;\d+;\d+;\d+|48;5;\d+|4[0-7]|10[0-7])m/g;
 const CSI_BG_RESET_RE = /\x1b\[49m/g;
 const CSI_FULL_RESET_RE = /\x1b\[0m/g;
 
@@ -48,11 +47,10 @@ function splitLeadingOsc(line: string): [string, string] {
 	return [line.slice(0, index), line.slice(index)];
 }
 
-function paintLine(line: string, width: number, bgAnsi: string): string {
+export function paintLine(line: string, width: number, bgAnsi: string): string {
 	const [prefix, rest] = splitLeadingOsc(line);
 	const padded = rest + " ".repeat(Math.max(0, width - visibleWidth(rest)));
 	const normalized = padded
-		.replace(CSI_BG_RE, bgAnsi)
 		.replace(CSI_BG_RESET_RE, bgAnsi)
 		.replace(CSI_FULL_RESET_RE, `\x1b[0m${bgAnsi}`);
 	return `${prefix}${bgAnsi}${normalized}\x1b[49m`;
@@ -62,14 +60,13 @@ function paintLines(lines: string[], width: number, bgAnsi: string): string[] {
 	return lines.map((line) => paintLine(line, width, bgAnsi));
 }
 
-function patchRender(
+export function patchRender(
 	prototype: RenderablePrototype & Record<PropertyKey, unknown>,
 	modeForInstance: PaintMode | ((instance: any) => PaintMode),
 	colours: Record<PaintMode, string>,
-): void {
-	if (!prototype?.render || prototype[PATCHED]) return;
-
-	const original = prototype.render;
+): () => void {
+  if (!prototype?.render) return () => {};
+  const original = (prototype[ORIGINAL_RENDER] as typeof prototype.render | undefined) ?? prototype.render;
 	prototype[ORIGINAL_RENDER] = original;
 	prototype[PATCHED] = true;
 
@@ -80,6 +77,13 @@ function patchRender(
 		const mode = typeof modeForInstance === "function" ? modeForInstance(this) : modeForInstance;
 		return paintLines(lines, width, colours[mode]);
 	};
+  const patched = prototype.render;
+  return () => {
+    if (prototype.render !== patched) return;
+    prototype.render = original;
+    delete prototype[ORIGINAL_RENDER];
+    delete prototype[PATCHED];
+  };
 }
 
 // ===========================================================================
@@ -154,31 +158,22 @@ function resolveLoaderPrototype(
 	}
 }
 
-export default async function (_pi: ExtensionAPI) {
-	const colours: Record<PaintMode, string> = {
-		user: hexToBgAnsi(COLOURS.user),
-		work: hexToBgAnsi(COLOURS.work),
-		assistant: hexToBgAnsi(COLOURS.assistant),
-	};
-
-	const { UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent, BorderedLoader } = (await import(
-		resolvePiRuntimeModuleUrl()
-	)) as {
-		UserMessageComponent: new (...args: any[]) => any;
-		AssistantMessageComponent: new (...args: any[]) => any;
-		ToolExecutionComponent: new (...args: any[]) => any;
-		BorderedLoader: new (...args: any[]) => any;
-	};
-
-	patchRender(UserMessageComponent.prototype, "user", colours);
-	patchRender(ToolExecutionComponent.prototype, "work", colours);
-	patchRender(resolveLoaderPrototype(BorderedLoader), "work", colours);
-
-	// Assistant messages that include tool calls are intermediate working turns;
-	// final assistant responses have no tool calls and get the assistant colour.
-	patchRender(
-		AssistantMessageComponent.prototype,
-		(instance: { hasToolCalls?: boolean }) => (instance.hasToolCalls ? "work" : "assistant"),
-		colours,
-	);
+export default function (pi: ExtensionAPI) {
+  let undo: Array<() => void> = [];
+  const restore = () => { for (const dispose of undo) dispose(); undo = []; };
+  pi.on("session_shutdown", restore);
+  pi.on("session_start", async (_event, ctx) => {
+    restore();
+    if (ctx.mode !== "tui") return;
+    const colours = {
+      user: hexToBgAnsi(COLOURS.user), work: hexToBgAnsi(COLOURS.work), assistant: hexToBgAnsi(COLOURS.assistant),
+    };
+    const { UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent, BorderedLoader } = await import(resolvePiRuntimeModuleUrl());
+    undo = [
+      patchRender(UserMessageComponent.prototype, "user", colours),
+      patchRender(ToolExecutionComponent.prototype, "work", colours),
+      patchRender(resolveLoaderPrototype(BorderedLoader), "work", colours),
+      patchRender(AssistantMessageComponent.prototype, (instance: { hasToolCalls?: boolean }) => instance.hasToolCalls ? "work" : "assistant", colours),
+    ];
+  });
 }

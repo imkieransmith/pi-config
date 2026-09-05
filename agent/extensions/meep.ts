@@ -3,7 +3,7 @@
  *
  * Original - https://github.com/adidoes/pi-meep
  */
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,8 +16,6 @@ const SOUND_B64 = `
 const TMP_PATH = join(tmpdir(), "pi-meep.mp3");
 const DEFAULT_VOLUME = 4;
 const MAX_VOLUME = 4;
-const MEEP_UI_WRAPPED = Symbol.for("pi-meep.ui-wrapped");
-const BLOCKING_UI_METHODS = ["select", "confirm", "input", "editor", "custom"] as const;
 
 function decodeSound(): void {
   if (existsSync(TMP_PATH)) return;
@@ -73,59 +71,11 @@ function playReadySound(): void {
   playSound();
 }
 
-// MONKEY-PATCH (pi internals): we wrap ctx.ui's blocking methods so the meep
-// sound plays whenever the agent stops to wait for the user — a question, a
-// confirm, or end-of-turn. This deliberately reaches into the host UI object
-// rather than relying on a dedicated event.
-//
-// Fragility / maintenance:
-//   - BLOCKING_UI_METHODS must stay in sync with pi's ExtensionContext["ui"]
-//     API. If pi renames/adds a blocking prompt method, it simply won't meep
-//     (silent no-op) — typeof guard below skips anything missing, so it never
-//     throws. Re-check this list on pi upgrades.
-//   - MEEP_UI_WRAPPED guards against double-wrapping across session_start /
-//     agent_start / tool_call / resume re-entry.
-// A non-patching alternative would be a first-class "awaiting user input" hook
-// from pi; until that exists, wrapping is the only way to cover every prompt.
-function installWaitingSound(ctx: ExtensionContext): void {
-  if (!ctx.hasUI) return;
-
-  const ui = ctx.ui as ExtensionContext["ui"] & Record<PropertyKey, unknown>;
-  if (ui[MEEP_UI_WRAPPED]) return;
-
-  for (const method of BLOCKING_UI_METHODS) {
-    const original = ui[method];
-    if (typeof original !== "function") continue;
-
-    ui[method] = function meepBeforeWaiting(this: ExtensionContext["ui"], ...args: unknown[]) {
-      playReadySound();
-      return original.apply(this, args);
-    };
-  }
-
-  Object.defineProperty(ui, MEEP_UI_WRAPPED, {
-    value: true,
-    enumerable: false,
-    configurable: false,
-  });
-}
-
 export default function (pi: ExtensionAPI) {
-  pi.on("session_start", async (_event, ctx) => {
-    decodeSound();
-    installWaitingSound(ctx);
-  });
-
-  pi.on("agent_start", async (_event, ctx) => {
-    installWaitingSound(ctx);
-  });
-
-  pi.on("tool_call", async (_event, ctx) => {
-    installWaitingSound(ctx);
-  });
-
-  pi.on("agent_end", async (_event, ctx) => {
-    installWaitingSound(ctx);
-    playReadySound();
-  });
+  const ready = (_event: unknown, ctx: { mode: string }) => {
+    if (ctx.mode !== "tui") return;
+    try { playReadySound(); } catch { /* Sound failures must not affect the session. */ }
+  };
+  pi.on("ui_prompt_start", ready);
+  pi.on("agent_settled", ready);
 }

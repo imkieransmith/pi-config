@@ -1,11 +1,11 @@
 /**
  * Advisor — consult one fixed reviewer model for one recommended next move.
  *
- * The tool requires a short brief and always uses openai-codex/gpt-5.6-sol with
+ * The tool requires a short brief and always uses openai-codex/gpt-6-astra with
  * one static usage contract and no active-model-dependent policy.
  *
  * /advisor status   - show the configured reviewer and call counts.
- * /advisor debug    - show the debug log location and last payload sample.
+ * /advisor debug    - show bounded status/error diagnostics (no payload samples).
  *
  * Merged from the former `advisor` and `senior-dev` extensions.
  * Advisor original - https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-advisor
@@ -18,7 +18,7 @@ import { ADVISOR_BRIEF_MAX_CHARS, normalizeAdvisorBrief } from "./brief.ts";
 import { ADVISOR_TOOL_NAME, debugLogPath, engineStats, modelKey, resetEngineState, runAdvisor } from "./engine.ts";
 
 const ADVISOR_PROVIDER = "openai-codex";
-const ADVISOR_MODEL_ID = "gpt-5.6-sol";
+const ADVISOR_MODEL_ID = "gpt-6-astra";
 const DEFAULT_EFFORT: ThinkingLevel = "high";
 
 interface ResolvedAdvisor {
@@ -55,7 +55,7 @@ function isActive(pi: ExtensionAPI): boolean {
 function setStatus(ctx: ExtensionContext): void {
 	if (!ctx.hasUI) return;
 	const r = resolveAdvisor(ctx);
-	ctx.ui.setStatus("advisor", r.model ? `advisor: ${configuredAdvisorKey()}` : `advisor: ${configuredAdvisorKey()} unavailable`);
+	ctx.ui.setStatus("advisor", r.model ? undefined : ctx.ui.theme.fg("warning", "advisor unavailable"));
 }
 
 function statusText(pi: ExtensionAPI, ctx: ExtensionContext): string {
@@ -80,7 +80,7 @@ function debugText(): string {
 	return [
 		"advisor debug",
 		`debug log: ${debugLogPath()}`,
-		stats.lastPayloadSamplePath ? `last payload sample: ${stats.lastPayloadSamplePath}` : "last payload sample: (none yet this session)",
+		"payload samples: disabled",
 		`attempted/successful: ${stats.attemptedCalls}/${stats.successfulCalls}`,
 		stats.lastError ? `last error: ${stats.lastError}` : undefined,
 	]
@@ -120,9 +120,6 @@ function registerAdvisorTool(pi: ExtensionAPI): void {
 				signal,
 				onUpdate,
 			});
-			if (result.details?.errorMessage) {
-				throw new Error(`Advisor unavailable: ${result.details.errorMessage}. Proceed with your own judgment.`);
-			}
 			return result;
 		},
 	});

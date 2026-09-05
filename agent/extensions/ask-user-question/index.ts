@@ -9,6 +9,9 @@ import { AskUserQuestionComponent } from "./component.ts";
 import { InputSchema, type Question, type Result } from "./schema.ts";
 
 export default function (pi: ExtensionAPI) {
+  pi.on("session_start", (_event, ctx) => {
+    if (ctx.mode !== "tui") pi.setActiveTools(pi.getActiveTools().filter(name => name !== "ask_user_question"));
+  });
   pi.registerTool({
     name: "ask_user_question",
     label: "Ask User",
@@ -16,13 +19,13 @@ export default function (pi: ExtensionAPI) {
 Use this tool when multiple valid approaches exist and you need the user's preference to continue.
 Each question must have 2–4 options for the user to choose from.
 Set multiSelect: true when more than one option can validly apply at the same time.
-The header field is a short label (max 12 characters) used in the tab bar when showing multiple questions.
+The header is a short tab label. Long labels are shortened in the display.
 Always use this tool instead of asking questions in plain text — it provides a structured, interactive UI.`,
 
     parameters: InputSchema,
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (!ctx.hasUI) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (ctx.mode !== "tui") {
         // Non-interactive session — deregister so the LLM won't try again
         pi.setActiveTools(
           pi.getActiveTools().filter((name) => name !== "ask_user_question"),
@@ -42,12 +45,21 @@ Always use this tool instead of asking questions in plain text — it provides a
         };
       }
 
-      const result = await ctx.ui.custom<Result | null>(
-        (tui, theme, _kb, done) =>
-          new AskUserQuestionComponent(params.questions, tui, theme, done),
-      );
+      let onAbort: (() => void) | undefined;
+      let result: Result | null | undefined;
+      try {
+        if (signal?.aborted) return { content: [{ type: "text", text: "Question aborted" }], details: { questions: params.questions, answers: {}, cancelled: true } };
+        result = await ctx.ui.custom<Result | null>((tui, theme, _kb, done) => {
+          onAbort = () => done(null);
+          signal?.addEventListener("abort", onAbort, { once: true });
+          if (signal?.aborted) done(null);
+          return new AskUserQuestionComponent(params.questions, tui, theme, done);
+        });
+      } finally {
+        if (onAbort) signal?.removeEventListener("abort", onAbort);
+      }
 
-      if (result === null || result.cancelled) {
+      if (!result || result.cancelled) {
         return {
           content: [{ type: "text", text: "User cancelled" }],
           details: {

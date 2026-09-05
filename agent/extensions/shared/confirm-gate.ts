@@ -11,48 +11,39 @@
  *   - confirm-destructive.ts — git-aware data-loss safety net
  * See those files for the command-ownership split that prevents double prompts.
  *
- * The allow-list lives on globalThis (Symbol-keyed) so it survives module
- * re-import across /new, /fork, /resume, and is genuinely shared between the
- * two extension modules rather than being a per-module closure.
+ * A shared weak map scopes grants to the session manager and session ID.
+ * Each extension load installs its own lifecycle reset.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const ALLOW_STATE_KEY = Symbol.for("pi-confirm-gate-allowlist");
-const RESET_INSTALLED_KEY = Symbol.for("pi-confirm-gate-reset-installed");
+const ALLOW_STATE_KEY = Symbol.for("pi-confirm-gate-sessions");
+type SessionContext = Pick<ExtensionContext, "sessionManager">;
+interface GateState { sessionId: string; allowedKeys: Set<string> }
 
-interface GateState {
-  allowedKeys: Set<string>;
+// A manager identifies an SDK session instance; its ID changes on new/resume.
+// Weak keys neither mix concurrent instances nor retain closed sessions.
+function states(): WeakMap<object, GateState> {
+  const globals = globalThis as unknown as { [key: symbol]: WeakMap<object, GateState> | undefined };
+  return globals[ALLOW_STATE_KEY] ??= new WeakMap();
 }
-
-function gateState(): GateState {
-  const g = globalThis as unknown as { [k: symbol]: GateState | undefined };
-  if (!g[ALLOW_STATE_KEY]) g[ALLOW_STATE_KEY] = { allowedKeys: new Set<string>() };
-  return g[ALLOW_STATE_KEY]!;
+function gateState(ctx: SessionContext): GateState {
+  const manager = ctx.sessionManager;
+  const sessionId = manager.getSessionId();
+  let state = states().get(manager);
+  if (!state || state.sessionId !== sessionId) {
+    state = { sessionId, allowedKeys: new Set() };
+    states().set(manager, state);
+  }
+  return state;
 }
-
-export function isSessionAllowed(allowKey: string): boolean {
-  return gateState().allowedKeys.has(allowKey);
+function resetSessionAllowList(ctx: SessionContext): void {
+  states().delete(ctx.sessionManager);
 }
-
-export function rememberSessionAllow(allowKey: string): void {
-  gateState().allowedKeys.add(allowKey);
-}
-
-export function resetSessionAllowList(): void {
-  gateState().allowedKeys.clear();
-}
-
-/**
- * Register a one-time session_start reset so "for this session" memory is
- * scoped to the actual session. Safe to call from every consuming extension —
- * a globalThis guard ensures the handler is registered only once.
- */
 export function installSessionAllowReset(pi: ExtensionAPI): void {
-  const g = globalThis as unknown as { [k: symbol]: boolean | undefined };
-  if (g[RESET_INSTALLED_KEY]) return;
-  g[RESET_INSTALLED_KEY] = true;
-  pi.on("session_start", async () => resetSessionAllowList());
+  // Register on every extension load, not once for the entire process.
+  pi.on("session_start", (_event, ctx) => resetSessionAllowList(ctx));
+  pi.on("session_shutdown", (_event, ctx) => resetSessionAllowList(ctx));
 }
 
 const ALLOW_ONCE = "Allow once";
@@ -83,15 +74,24 @@ export async function requestSessionConfirm(
   req: ConfirmRequest,
   noUiReason: string,
 ): Promise<ConfirmOutcome> {
-  if (isSessionAllowed(req.allowKey)) return { allow: true };
-  if (!ctx.hasUI) return { allow: false, reason: `${noUiReason} (no UI to confirm)` };
+  try {
+    const signal = ctx.signal;
+    if (signal?.aborted) return { allow: false, reason: "Confirmation aborted" };
+    const state = gateState(ctx);
+    if (state.allowedKeys.has(req.allowKey)) return { allow: true };
+    if (!ctx.hasUI) return { allow: false, reason: `${noUiReason} (no UI to confirm)` };
 
-  const choice = await ctx.ui.select(`${req.title}\n${req.detail}`, [ALLOW_ONCE, ALLOW_SESSION, BLOCK]);
+    const choice = await ctx.ui.select(`${req.title}\n${req.detail}`, [ALLOW_ONCE, ALLOW_SESSION, BLOCK], { signal });
 
-  if (choice === ALLOW_ONCE) return { allow: true };
-  if (choice === ALLOW_SESSION) {
-    rememberSessionAllow(req.allowKey);
-    return { allow: true };
+    if (signal?.aborted) return { allow: false, reason: "Confirmation aborted" };
+    if (gateState(ctx) !== state) return { allow: false, reason: "Session changed during confirmation" };
+    if (choice === ALLOW_ONCE) return { allow: true };
+    if (choice === ALLOW_SESSION) {
+      state.allowedKeys.add(req.allowKey);
+      return { allow: true };
+    }
+    return { allow: false };
+  } catch {
+    return { allow: false, reason: "Confirmation unavailable or session closed" };
   }
-  return { allow: false };
 }

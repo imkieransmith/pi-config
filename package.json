@@ -5,10 +5,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:advisor": "node --test agent/extensions/advisor/brief.test.ts",
+    "test:advisor": "node --import ./agent/extensions/tests/register.mjs --test agent/extensions/advisor/brief.test.ts agent/extensions/tests/advisor.test.ts",
     "test:context": "node --test agent/extensions/context/appendix.test.ts",
     "test:evidence": "node --test agent/extensions/evidence/core.test.ts",
-    "test:security": "node --test agent/extensions/security/policy.test.ts"
+    "test:security": "node --test agent/extensions/security/policy.test.ts",
+    "test": "node --import ./agent/extensions/tests/register.mjs --test \"agent/extensions/**/*.test.ts\"",
+    "test:integration": "node --import ./agent/extensions/tests/register.mjs --test agent/extensions/tests/integration.test.mjs",
+    "typecheck": "node agent/extensions/tests/typecheck.mjs"
   },
   "pi": {
     "extensions": [
@@ -43,6 +46,7 @@
     }
   },
   "devDependencies": {
-    "typebox": "^1.1.24"
+    "typebox": "^1.1.24",
+    "typescript": "^7.0.2"
   }
 }

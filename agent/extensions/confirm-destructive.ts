@@ -25,10 +25,12 @@ import type {
 	UserBashEvent,
 	UserBashEventResult,
 } from '@earendil-works/pi-coding-agent';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFileAsync = promisify(execFile);
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { basename, isAbsolute, relative, resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
+import { resolveSecurityPath } from './security/policy.ts';
 import { installSessionAllowReset, requestSessionConfirm } from './shared/confirm-gate.js';
 
 export interface DestructiveAction {
@@ -47,45 +49,45 @@ interface DestructiveCommandPattern {
 const DESTRUCTIVE_COMMAND_PATTERNS: DestructiveCommandPattern[] = [
 	{
 		pattern:
-			/(^|[;&|]\s*)(npx\s+|pnpx\s+|pnpm\s+exec\s+|bunx\s+)?prisma\s+(migrate\s+reset|db\s+push\b[^;&|]*--force-reset|db\s+execute\b)/,
+			/(^|[;\n&|]\s*)(npx\s+|pnpx\s+|pnpm\s+exec\s+|bunx\s+)?prisma\s+(migrate\s+reset|db\s+push\b[^;&|]*--force-reset|db\s+execute\b)/,
 		reason:
 			'Runs a potentially destructive Prisma database operation',
 		allow_key: 'bash:prisma-destructive',
 	},
 	{
 		pattern:
-			/(^|[;&|]\s*)(psql|mysql|mariadb|sqlite3)\b[^;&|]*\b(drop|delete\s+from|truncate|alter\s+table|update\s+\S+\s+set)\b/i,
+			/(^|[;\n&|]\s*)(psql|mysql|mariadb|sqlite3)\b[^;&|]*\b(drop|delete\s+from|truncate|alter\s+table|update\s+\S+\s+set)\b/i,
 		reason: 'Runs destructive SQL through a database CLI',
 		allow_key: 'bash:db-cli-destructive-sql',
 	},
 	{
 		pattern:
-			/(^|[;&|]\s*)find\b[^;&|]*(\s-delete\b|-exec\s+(sudo\s+)?rm\b)/,
+			/(^|[;\n&|]\s*)find\b[^;&|]*(\s-delete\b|-exec\s+(sudo\s+)?rm\b)/,
 		reason: 'Deletes files found by find',
 		allow_key: 'bash:find-delete',
 	},
 	{
 		pattern:
-			/(^|[;&|]\s*)git\s+clean\b[^;&|]*-[a-zA-Z]*[fdx][a-zA-Z]*/,
+			/(^|[;\n&|]\s*)git\s+clean\b[^;&|]*-[a-zA-Z]*[fdx][a-zA-Z]*/,
 		reason: 'Deletes untracked files or directories',
 		allow_key: 'bash:git-clean',
 	},
 	{
 		pattern:
-			/(^|[;&|]\s*)git\s+(checkout|restore)\b[^;&|]*(\s--\s+\.\s*$|\s\.\s*$)/,
+			/(^|[;\n&|]\s*)git\s+(checkout|restore)\b[^;&|]*(\s--\s+\.\s*$|\s\.\s*$)/,
 		reason: 'Discards working tree changes',
 		allow_key: 'bash:git-discard-all',
 	},
 	{
 		pattern:
-			/(^|[;&|]\s*)truncate\b[^;&|]*(\s-s\s*0\b|\s--size\s*=?\s*0\b)/,
+			/(^|[;\n&|]\s*)truncate\b[^;&|]*(\s-s\s*0\b|\s--size\s*=?\s*0\b)/,
 		reason: 'Empties file contents',
 		allow_key: 'bash:truncate-zero',
 	},
 	{
 		// dd to a regular file. dd to a device (of=/dev/...) is hard-blocked by
 		// security.ts, so it is deliberately excluded here.
-		pattern: /(^|[;&|]\s*)dd\b[^;&|]*\bof=(?!\/dev\/)/,
+		pattern: /(^|[;\n&|]\s*)dd\b[^;&|]*\bof=(?!\/dev\/)/,
 		reason: 'Overwrites a file with dd',
 		allow_key: 'bash:dd-output',
 	},
@@ -101,19 +103,17 @@ function preview(value: string, max = 500): string {
 		: normalized;
 }
 
-function git(args: string[], cwd: string): string | undefined {
-	try {
-		return execFileSync('git', ['-C', cwd, ...args], {
-			encoding: 'utf-8',
-			stdio: ['ignore', 'pipe', 'ignore'],
-		}).trim();
-	} catch {
-		return undefined;
-	}
+async function git(args: string[], cwd: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
+      encoding: 'utf-8', timeout: 2000, maxBuffer: 1024 * 1024,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+    });
+    return stdout.trim();
+  } catch { return undefined; }
 }
-
-function is_git_repo(cwd: string): boolean {
-	return git(['rev-parse', '--is-inside-work-tree'], cwd) === 'true';
+async function is_git_repo(cwd: string): Promise<boolean> {
+  return await git(['rev-parse', '--is-inside-work-tree'], cwd) === 'true';
 }
 
 type GitRecoverability =
@@ -122,13 +122,13 @@ type GitRecoverability =
 	| 'untracked'
 	| 'not-git';
 
-function get_git_recoverability(
+async function get_git_recoverability(
 	cwd: string,
 	path: string,
-): GitRecoverability {
-	if (!is_git_repo(cwd)) return 'not-git';
+): Promise<GitRecoverability> {
+	if (!await is_git_repo(cwd)) return 'not-git';
 
-	const status = git(['status', '--porcelain=v1', '--', path], cwd);
+	const status = await git(['status', '--porcelain=v1', '--', path], cwd);
 	if (status === undefined) return 'not-git';
 	if (status.length > 0) {
 		return status.split('\n').some((line) => line.startsWith('??'))
@@ -136,27 +136,12 @@ function get_git_recoverability(
 			: 'tracked-dirty';
 	}
 
-	const tracked = git(['ls-files', '--', path], cwd);
+	const tracked = await git(['ls-files', '--', path], cwd);
 	return tracked ? 'tracked-clean' : 'untracked';
 }
 
-function is_git_recoverable(cwd: string, path: string): boolean {
-	return get_git_recoverability(cwd, path) === 'tracked-clean';
-}
-
-function is_path_within(parent: string, child: string): boolean {
-	const rel = relative(parent, child);
-	return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel);
-}
-
-function is_agent_temp_path(path: string): boolean {
-	const temp_root = resolve(tmpdir());
-	const absolute = resolve(path);
-	if (!is_path_within(temp_root, absolute)) return false;
-	const first_segment = relative(temp_root, absolute).split(
-		/[\\/]+/,
-	)[0];
-	return /^my-pi-(audit|sandbox|temp|tmp|work)-/.test(first_segment);
+async function is_git_recoverable(cwd: string, path: string): Promise<boolean> {
+	return await get_git_recoverability(cwd, path) === 'tracked-clean';
 }
 
 function is_todo_planning_note(path: string): boolean {
@@ -177,7 +162,7 @@ function extract_command_paths(
 	command: string,
 	command_name: 'rm' | 'git-rm',
 ): string[] | undefined {
-	if (/[;&|`$()<>]/.test(command)) return undefined;
+	if (/[;\n&|`$()<>*?{}\[\]]/.test(command)) return undefined;
 	const words = parse_shell_words(command);
 	const command_index =
 		command_name === 'rm'
@@ -195,33 +180,22 @@ function extract_command_paths(
 		.filter((word) => word !== '--' && !word.startsWith('-'));
 }
 
-function describe_path_risk(cwd: string, paths: string[]): string {
-	const risky = paths.filter(
-		(path) => !is_git_recoverable(cwd, path),
-	);
-	if (risky.length === 0) return 'Deletes git-recoverable files';
-
-	const risks = new Set(
-		risky.map((path) => get_git_recoverability(cwd, path)),
-	);
-	if (risks.has('untracked')) {
-		return 'Deletes untracked files or directories that git cannot restore';
-	}
-	if (risks.has('tracked-dirty')) {
-		return 'Deletes files with uncommitted changes';
-	}
-	return 'Deletes files outside git recovery';
+async function describe_path_risk(cwd: string, paths: string[]): Promise<string> {
+  const risks = new Set(await Promise.all(paths.map(path => get_git_recoverability(cwd, path))));
+  if (risks.has('untracked')) return 'Deletes untracked files that git cannot restore';
+  if (risks.has('tracked-dirty')) return 'Deletes files with uncommitted changes';
+  return 'Deletes files outside git recovery';
 }
 
-function assess_rm_command(
+async function assess_rm_command(
 	command: string,
 	cwd: string,
 	session_created_paths: ReadonlySet<string> = new Set(),
-): DestructiveAction | undefined {
+): Promise<DestructiveAction | undefined> {
 	// shred is hard-blocked by security.ts (disk destruction), so it is omitted
 	// here to keep each command owned by exactly one gate.
 	if (
-		!/(^|[;&|]\s*)(sudo\s+)?(rm|rmdir|unlink)\b/.test(command)
+		!/(^|[;\n&|]\s*)(sudo\s+)?(rm|rmdir|unlink)\b/.test(command)
 	) {
 		return undefined;
 	}
@@ -232,20 +206,19 @@ function assess_rm_command(
 			paths.every((path) => {
 				const absolute = resolve(cwd, path);
 				return (
-					session_created_paths.has(absolute) ||
-					is_agent_temp_path(absolute)
+					session_created_paths.has(absolute)
 				);
 			})
 		) {
 			return undefined;
 		}
-		if (paths.every((path) => is_git_recoverable(cwd, path))) {
+		if ((await Promise.all(paths.map(path => is_git_recoverable(cwd, path)))).every(Boolean)) {
 			return undefined;
 		}
 	}
 
 	const reason = paths?.length
-		? describe_path_risk(cwd, paths)
+		? await describe_path_risk(cwd, paths)
 		: 'Deletes files or directories';
 	return {
 		title: 'Confirm destructive command?',
@@ -255,11 +228,11 @@ function assess_rm_command(
 	};
 }
 
-function assess_git_rm_command(
+async function assess_git_rm_command(
 	command: string,
 	cwd: string,
-): DestructiveAction | undefined {
-	if (!/(^|[;&|]\s*)git\s+rm\b/.test(command)) return undefined;
+): Promise<DestructiveAction | undefined> {
+	if (!/(^|[;\n&|]\s*)git\s+rm\b/.test(command)) return undefined;
 	if (/\s-f\b|\s--force\b/.test(command)) {
 		return {
 			title: 'Confirm forced git removal?',
@@ -273,13 +246,13 @@ function assess_git_rm_command(
 	if (
 		paths &&
 		paths.length > 0 &&
-		paths.every((path) => is_git_recoverable(cwd, path))
+		(await Promise.all(paths.map(path => is_git_recoverable(cwd, path)))).every(Boolean)
 	) {
 		return undefined;
 	}
 
 	const reason = paths?.length
-		? describe_path_risk(cwd, paths)
+		? await describe_path_risk(cwd, paths)
 		: 'Deletes tracked files from git';
 	return {
 		title: 'Confirm git removal?',
@@ -289,14 +262,13 @@ function assess_git_rm_command(
 	};
 }
 
-function assess_git_reset_hard(
+async function assess_git_reset_hard(
 	command: string,
 	cwd: string,
-): DestructiveAction | undefined {
-	if (!/(^|[;&|]\s*)git\s+reset\b[^;&|]*--hard\b/.test(command)) {
+): Promise<DestructiveAction | undefined> {
+	if (!/(^|[;\n&|]\s*)git\s+reset\b[^;&|]*--hard\b/.test(command)) {
 		return undefined;
 	}
-	if (git(['status', '--porcelain=v1'], cwd) === '') return undefined;
 
 	return {
 		title: 'Confirm hard reset?',
@@ -306,18 +278,42 @@ function assess_git_reset_hard(
 	};
 }
 
-export function assess_bash_command(
+export async function assess_bash_command(
 	command: string,
 	cwd = process.cwd(),
 	session_created_paths: ReadonlySet<string> = new Set(),
-): DestructiveAction | undefined {
-	const normalized = command.trim();
+): Promise<DestructiveAction | undefined> {
+	let normalized = command.trim();
+  // Resolve simple git global -C options before checking recoverability.
+  // Complex shells cannot safely inherit the original working directory.
+  if (/^git\s/.test(normalized) && !/[;\n&|`$()<>]/.test(normalized)) {
+    const words = parse_shell_words(normalized);
+    let index = 1;
+    let uncertain = false;
+    while (words[index]?.startsWith('-')) {
+      const option = words[index++];
+      if (option === '-C' && words[index]) cwd = resolve(cwd, words[index++]);
+      else if (option.startsWith('-C') && option.length > 2) cwd = resolve(cwd, option.slice(2));
+      else if (['--no-pager', '--no-optional-locks', '--literal-pathspecs'].includes(option)) continue;
+      else { uncertain = true; break; }
+    }
+    if (uncertain && /\b(?:rm|reset|restore|checkout|clean)\b/.test(normalized)) {
+      return { title: 'Confirm git command?', description: preview(command), reason: 'Git target or options require review', allow_key: 'bash:git-uncertain' };
+    }
+    if (!uncertain) normalized = 'git ' + words.slice(index).map(word => /\s/.test(word) ? JSON.stringify(word) : word).join(' ');
+  }
+  if (/[;\n&|`$()<>]/.test(normalized) && /\b(?:rm|rmdir|unlink|reset|restore|checkout|clean|truncate)\b/.test(normalized)) {
+    return { title: 'Confirm destructive shell?', description: preview(command), reason: 'Compound or dynamic shell may discard files', allow_key: 'bash:destructive-shell' };
+  }
+  if (/^git\s+restore\b/.test(normalized) || (/^git\s+checkout\b/.test(normalized) && !/^git\s+checkout\s+-b\s+[^\s]+$/.test(normalized))) {
+    return { title: 'Confirm git restore?', description: preview(command), reason: 'May discard working tree or staged changes', allow_key: 'bash:git-restore' };
+  }
 	if (!normalized) return undefined;
 
 	const specific =
-		assess_rm_command(normalized, cwd, session_created_paths) ??
-		assess_git_rm_command(normalized, cwd) ??
-		assess_git_reset_hard(normalized, cwd);
+		(await assess_rm_command(normalized, cwd, session_created_paths)) ??
+		(await assess_git_rm_command(normalized, cwd)) ??
+		(await assess_git_reset_hard(normalized, cwd));
 	if (specific) return specific;
 
 	const match = DESTRUCTIVE_COMMAND_PATTERNS.find(({ pattern }) =>
@@ -333,20 +329,20 @@ export function assess_bash_command(
 	};
 }
 
-function assess_file_write(
+async function assess_file_write(
 	cwd: string,
 	path: unknown,
 	session_created_paths: ReadonlySet<string> = new Set(),
-): DestructiveAction | undefined {
+): Promise<DestructiveAction | undefined> {
 	if (typeof path !== 'string' || !path.trim()) return undefined;
 	if (is_todo_planning_note(path)) return undefined;
-	const absolute = resolve(cwd, path);
+	const absolute = await resolveSecurityPath(path, cwd);
 	if (!existsSync(absolute)) return undefined;
 	if (session_created_paths.has(absolute)) return undefined;
-	if (is_git_recoverable(cwd, path)) return undefined;
+	if (await is_git_recoverable(cwd, path)) return undefined;
 
 	const reason =
-		get_git_recoverability(cwd, path) === 'tracked-dirty'
+		await get_git_recoverability(cwd, path) === 'tracked-dirty'
 			? 'Overwrites a file with uncommitted changes'
 			: 'Overwrites an untracked file git cannot restore';
 
@@ -358,11 +354,11 @@ function assess_file_write(
 	};
 }
 
-function assess_file_edit(
+async function assess_file_edit(
 	cwd: string,
 	input: Record<string, unknown>,
 	session_created_paths: ReadonlySet<string> = new Set(),
-): DestructiveAction | undefined {
+): Promise<DestructiveAction | undefined> {
 	const path =
 		typeof input.path === 'string' ? input.path : undefined;
 	const edits = Array.isArray(input.edits) ? input.edits : [];
@@ -382,10 +378,10 @@ function assess_file_edit(
 		return undefined;
 	}
 	if (path && is_todo_planning_note(path)) return undefined;
-	if (path && session_created_paths.has(resolve(cwd, path))) {
+	if (path && session_created_paths.has(await resolveSecurityPath(path, cwd))) {
 		return undefined;
 	}
-	if (path && is_git_recoverable(cwd, path)) return undefined;
+	if (path && await is_git_recoverable(cwd, path)) return undefined;
 
 	return {
 		title: 'Confirm large content removal?',
@@ -418,11 +414,11 @@ function assess_custom_tool(
 	};
 }
 
-export function assess_tool_call(
+export async function assess_tool_call(
 	event: ToolCallEvent,
 	cwd: string,
 	session_created_paths: ReadonlySet<string> = new Set(),
-): DestructiveAction | undefined {
+): Promise<DestructiveAction | undefined> {
 	if (event.toolName === 'bash') {
 		const command = (event.input as { command?: unknown }).command;
 		return typeof command === 'string'
@@ -460,6 +456,8 @@ export default async function confirm_destructive(pi: ExtensionAPI) {
 
 	const pending_created_files = new Map<string, string>();
 	const session_created_files = new Set<string>();
+  pi.on('session_start', () => { pending_created_files.clear(); session_created_files.clear(); });
+  pi.on('session_shutdown', () => { pending_created_files.clear(); session_created_files.clear(); });
 
 	// 3-way confirm with a per-session allow-list shared with security.ts.
 	async function should_allow(
@@ -483,14 +481,14 @@ export default async function confirm_destructive(pi: ExtensionAPI) {
 			if (event.toolName === 'write') {
 				const path = event.input.path;
 				if (typeof path === 'string' && path.trim()) {
-					const absolute = resolve(ctx.cwd, path);
+					const absolute = await resolveSecurityPath(path, ctx.cwd);
 					if (!existsSync(absolute)) {
 						pending_created_files.set(event.toolCallId, absolute);
 					}
 				}
 			}
 
-			const action = assess_tool_call(
+			const action = await assess_tool_call(
 				event,
 				ctx.cwd,
 				session_created_files,
@@ -524,7 +522,7 @@ export default async function confirm_destructive(pi: ExtensionAPI) {
 			event: UserBashEvent,
 			ctx,
 		): Promise<UserBashEventResult | void> => {
-			const action = assess_bash_command(
+			const action = await assess_bash_command(
 				event.command,
 				event.cwd,
 				session_created_files,

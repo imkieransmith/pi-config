@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { stripVTControlCharacters } from "node:util";
 import {
   type Component,
   Editor,
@@ -15,6 +16,7 @@ import type { Option, Question, Result } from "./schema.ts";
 // Minimal interface satisfied by both the real TUI and a test stub.
 export interface TUILike {
   requestRender(): void;
+  terminal: { rows: number };
 }
 
 // ── QuestionState ─────────────────────────────────────────────────────────────
@@ -133,6 +135,7 @@ export class AskUserQuestionComponent implements Component {
       return [];
     }
 
+    width = Math.max(1, width);
     const t = this.theme;
     const lines: string[] = [];
     const add = (s: string) => lines.push(truncateToWidth(s, width));
@@ -164,7 +167,7 @@ export class AskUserQuestionComponent implements Component {
     return lines;
   }
 
-  private renderTabBar(_width: number, add: (s: string) => void): void {
+  private renderTabBar(width: number, add: (s: string) => void): void {
     const t = this.theme;
     const parts: string[] = [" "];
 
@@ -172,8 +175,11 @@ export class AskUserQuestionComponent implements Component {
       const q = this.questions[i];
       const s = this.states[i];
       const isActive = i === this.activeTab;
-      // Truncate header to 12 chars
-      const header = truncateToWidth(q.header, 12);
+      // Budget each label so long model-supplied headers do not break the tabs.
+      const headerWidth = Math.max(1, Math.min(24, Math.floor((width - 12) / this.questions.length) - 3));
+      // Truncation adds style resets around "...". Remove them before styling
+      // this plain label so the selected background covers the whole tab.
+      const header = stripVTControlCharacters(truncateToWidth(q.header, headerWidth));
       const label = ` ${header} `;
 
       let styled: string;
@@ -216,7 +222,7 @@ export class AskUserQuestionComponent implements Component {
     {
       const wrapped = wrapTextWithAnsi(
         t.fg("text", ` ${q.question}`),
-        width - 2,
+        Math.max(1, width - 2),
       );
       for (const line of wrapped) {
         add(line);
@@ -260,7 +266,7 @@ export class AskUserQuestionComponent implements Component {
           const indent = q.multiSelect ? "       " : "     ";
           const preview = truncateToWidth(
             state.freeTextValue ?? "",
-            width - indent.length,
+            Math.max(1, width - indent.length),
           );
           add(`${indent}${t.fg("dim", `"${preview}"`)}`);
         }
@@ -277,7 +283,7 @@ export class AskUserQuestionComponent implements Component {
         const indent = q.multiSelect ? "       " : "     ";
         const wrapped = wrapTextWithAnsi(
           t.fg("muted", opt.description),
-          width - indent.length,
+          Math.max(1, width - indent.length),
         );
         for (const line of wrapped) {
           add(`${indent}${line}`);
@@ -289,7 +295,7 @@ export class AskUserQuestionComponent implements Component {
     if (state.inEditMode) {
       add("");
       add(t.fg("muted", " Your answer:"));
-      const editorLines = this.editor.render(width - 4);
+      const editorLines = this.editor.render(Math.max(1, width - 4));
       for (const line of editorLines) {
         add(` ${line}`);
       }
