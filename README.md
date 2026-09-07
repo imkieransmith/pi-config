@@ -22,7 +22,7 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Plan Command** (`plan.ts`) — `/plan <request>` expands the write-plan skill. The skill handles captures; the command never force-closes them.
 - **Redact Sensitive Data** (`redact.ts`) — Redact secrets from tool output.
 - **Resource Overview** (`resource-overview.ts`) — Startup overview of actual available commands, skills and active tools.
-- **Response Metrics** (`response-metrics.ts`) — Persistent TUI-only elapsed-time, tool-call, and input/output-token row beneath each completed response.
+- **Response Metrics** (`response-metrics.ts`) — Persistent TUI-only elapsed time, tool count, input/output tokens and estimated main-model output tokens/sec. The rate includes request latency but excludes tools, user waits and advisor calls; it uses reported output tokens, not just visible text.
 - **RTK Rewrite** (`rtk.ts`) — Best-effort shell command optimization via `rtk rewrite`.
 - **Security Guard** (`security/`) — Confirms or blocks risky commands and sensitive file access.
 - **Superset Hooks** (`superset-hooks.ts`) — Emit Superset lifecycle hooks so the host shows a working indicator.

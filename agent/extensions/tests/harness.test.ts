@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { performance } from "node:perf_hooks";
 import { join } from "node:path";
 import { createGrepToolDefinition, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -19,7 +20,7 @@ import { installSessionAllowReset, requestSessionConfirm } from "../shared/confi
 import { redact_text, redact_value } from "../redact.ts";
 import { registerDiffTools } from "../tool-pills/diff-renderer.ts";
 import { renderOverview } from "../resource-overview.ts";
-import metrics from "../response-metrics.ts";
+import metrics, { formatMetricsRow } from "../response-metrics.ts";
 import meep from "../meep.ts";
 import { paintLine, patchRender } from "../colour-messages/index.ts";
 
@@ -301,6 +302,81 @@ test("response metrics include cache and tool-model usage and wait until settled
   assert.equal(entries.length, 0);
   await hooks.get("agent_settled")![0]({}, { mode: "tui" });
   assert.equal(entries[0][1].inputTokens, 39); assert.equal(entries[0][1].outputTokens, 6);
+});
+
+test("model token rate weights response time and excludes tools, user waits and nested usage", async t => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const { pi, hooks } = harness(); const entries: any[] = [];
+  pi.registerEntryRenderer = () => {};
+  pi.appendEntry = (_type, data) => { entries.push(data); };
+  metrics(pi);
+  const usage = { input: 5, cacheRead: 7, cacheWrite: 3, output: 100 };
+  await hooks.get("before_agent_start")![0]({});
+  await hooks.get("turn_start")![0]({});
+  // Includes the whole response wait, not just time after the first chunk.
+  now = 2_000;
+  await hooks.get("message_end")![0]({ message: { role: "assistant", usage } });
+  await hooks.get("tool_execution_start")![0]({});
+  now = 30_000; // A tool and a user reply took time.
+  await hooks.get("tool_execution_end")![0]({ result: { usage: { ...usage, output: 900 } } });
+  now = 50_000;
+  await hooks.get("turn_start")![0]({});
+  now = 54_000;
+  await hooks.get("message_end")![0]({ message: { role: "assistant", usage: { ...usage, output: 300 } } });
+  now = 60_000;
+  await hooks.get("agent_settled")![0]({}, { mode: "tui" });
+  assert.equal(entries[0].elapsedMs, 60_000);
+  assert.equal(entries[0].outputTokens, 1_300); // Totals still include nested calls.
+  assert.equal(entries[0].inputTokens, 45);
+  assert.equal(entries[0].modelTokensPerSecond, 400 / 6);
+  assert.match(formatMetricsRow(entries[0]), / │ ~66\.7 tok\/s$/);
+
+  // A new run must not retain the previous run's timing or tokens.
+  await hooks.get("before_agent_start")![0]({});
+  await hooks.get("turn_start")![0]({});
+  now = 61_000;
+  await hooks.get("message_end")![0]({ message: { role: "assistant", usage } });
+  await hooks.get("agent_settled")![0]({}, { mode: "tui" });
+  assert.equal(entries[1].modelTokensPerSecond, 100);
+  assert.match(formatMetricsRow(entries[1]), / │ ~100 tok\/s$/);
+});
+
+test("model token rate stays absent without measured time or reported output", async t => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const { pi, hooks } = harness(); const entries: any[] = [];
+  pi.registerEntryRenderer = () => {};
+  pi.appendEntry = (_type, data) => { entries.push(data); };
+  metrics(pi);
+  for (const mode of ["no start", "zero time", "no output"]) {
+    await hooks.get("before_agent_start")![0]({});
+    if (mode !== "no start") await hooks.get("turn_start")![0]({});
+    if (mode !== "zero time") now += 1_000;
+    await hooks.get("message_end")![0]({ message: { role: "assistant", usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: mode === "no output" ? 0 : 10 } } });
+    await hooks.get("agent_settled")![0]({}, { mode: "tui" });
+    assert.equal(entries.at(-1).modelTokensPerSecond, undefined);
+    assert.ok(!formatMetricsRow(entries.at(-1)).includes("tok/s"));
+  }
+});
+
+test("rate rendering rejects invalid measurements and keeps a single bounded row", () => {
+  const { pi } = harness(); let renderEntry: Function = () => {};
+  pi.registerEntryRenderer = (_type, renderer) => { renderEntry = renderer; };
+  metrics(pi);
+  const data = { elapsedMs: 1000, toolCalls: 1, inputTokens: 100, outputTokens: 50 };
+  for (const rate of [undefined, 50, Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+    const component = renderEntry({ data: { ...data, modelTokensPerSecond: rate } }, {}, theme);
+    for (const width of [1, 40, 120]) {
+      const lines = component.render(width);
+      assert.equal(lines.length, 1);
+      assert.ok(visibleWidth(lines[0]) <= width);
+    }
+    const row = component.render(120)[0];
+    if (rate === undefined) assert.ok(!row.includes("tok/s"));
+    else if (rate === 50) assert.ok(row.endsWith(" │ ~50 tok/s"));
+    else assert.equal(row, "Response metrics unavailable");
+  }
 });
 
 test("sounds use prompt/settled events and remain quiet outside TUI", async () => {

@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -9,10 +10,14 @@ export type ResponseMetricsData = {
   toolCalls: number;
   inputTokens: number;
   outputTokens: number;
+  modelTokensPerSecond?: number;
 };
 
 type ActiveRun = {
   startedAt: number;
+  modelStartedAt?: number;
+  modelElapsedMs: number;
+  modelOutputTokens: number;
   assistantMessages: number;
   toolCalls: number;
   inputTokens: number;
@@ -21,7 +26,9 @@ type ActiveRun = {
 
 function startRun(): ActiveRun {
   return {
-    startedAt: Date.now(),
+    startedAt: performance.now(),
+    modelElapsedMs: 0,
+    modelOutputTokens: 0,
     assistantMessages: 0,
     toolCalls: 0,
     inputTokens: 0,
@@ -59,14 +66,18 @@ export function formatTokens(tokens: number): string {
 
 export function formatMetricsRow(metrics: ResponseMetricsData): string {
   const tools = `${metrics.toolCalls} ${metrics.toolCalls === 1 ? "tool call" : "tool calls"}`;
-  return `⏱ ${formatDuration(metrics.elapsedMs)} │ ${tools} │ ↑ ${formatTokens(metrics.inputTokens)} │ ↓ ${formatTokens(metrics.outputTokens)}`;
+  const rate = metrics.modelTokensPerSecond;
+  const rateText = rate === undefined ? "" : ` │ ~${Number(rate.toFixed(1))} tok/s`;
+  return `⏱ ${formatDuration(metrics.elapsedMs)} │ ${tools} │ ↑ ${formatTokens(metrics.inputTokens)} │ ↓ ${formatTokens(metrics.outputTokens)}${rateText}`;
 }
 
 function isMetricsData(value: unknown): value is ResponseMetricsData {
   if (!value || typeof value !== "object") return false;
   const data = value as Partial<ResponseMetricsData>;
   return [data.elapsedMs, data.toolCalls, data.inputTokens, data.outputTokens]
-    .every((item) => typeof item === "number" && Number.isFinite(item));
+    .every((item) => typeof item === "number" && Number.isFinite(item))
+    && (data.modelTokensPerSecond === undefined
+      || (typeof data.modelTokensPerSecond === "number" && Number.isFinite(data.modelTokensPerSecond) && data.modelTokensPerSecond >= 0));
 }
 
 export default function (pi: ExtensionAPI) {
@@ -98,6 +109,12 @@ export default function (pi: ExtensionAPI) {
     activeRun ??= startRun();
   });
 
+  // A turn starts before request preparation/latency. Its assistant message
+  // ends before tool execution, so tools and user prompts stay outside this timer.
+  pi.on("turn_start", () => {
+    if (activeRun) activeRun.modelStartedAt = performance.now();
+  });
+
   pi.on("tool_execution_start", async () => {
     if (activeRun) activeRun.toolCalls += 1;
   });
@@ -107,6 +124,11 @@ export default function (pi: ExtensionAPI) {
     activeRun.assistantMessages += 1;
     activeRun.inputTokens += event.message.usage.input + event.message.usage.cacheRead + event.message.usage.cacheWrite;
     activeRun.outputTokens += event.message.usage.output;
+    if (activeRun.modelStartedAt !== undefined) {
+      activeRun.modelElapsedMs += Math.max(0, performance.now() - activeRun.modelStartedAt);
+      activeRun.modelOutputTokens += event.message.usage.output;
+      activeRun.modelStartedAt = undefined;
+    }
   });
 
   pi.on("tool_execution_end", event => {
@@ -123,10 +145,13 @@ export default function (pi: ExtensionAPI) {
     if (!completedRun || completedRun.assistantMessages === 0 || ctx.mode !== "tui") return;
 
     const metrics: ResponseMetricsData = {
-      elapsedMs: Math.max(0, Date.now() - completedRun.startedAt),
+      elapsedMs: Math.max(0, performance.now() - completedRun.startedAt),
       toolCalls: completedRun.toolCalls,
       inputTokens: completedRun.inputTokens,
       outputTokens: completedRun.outputTokens,
+      modelTokensPerSecond: completedRun.modelElapsedMs > 0 && completedRun.modelOutputTokens > 0
+        ? completedRun.modelOutputTokens / (completedRun.modelElapsedMs / 1_000)
+        : undefined,
     };
 
     pi.appendEntry(ENTRY_TYPE, metrics);
