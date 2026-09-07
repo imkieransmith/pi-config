@@ -13,7 +13,7 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 ### Extensions
 - **Advisor** (`advisor`) — One consultation tool with a required brief and fixed GPT-6-Astra reviewer. It receives a bounded snapshot of recent work and retries transient errors up to twice (after 2s and 4s), using Pi's retry helper. Progress shows retries; cancellation stops them. Reported usage includes failed attempts. `/advisor status` and `/advisor debug` expose diagnostics.
 - **Ask User Question** (`ask-user-question`) — TUI-only multiple-choice and free-text questions. Long headers are accepted and shortened for display.
-- **Colour Messages** (`colour-messages`) — Background colours for user, working, and final assistant rows.
+- **Colour Messages** (`colour-messages`) — Background colours for user, intermediate assistant/tool, and final assistant rows. Leaves native loaders and the editor's inline working indicator unchanged.
 - **Confirm Destructive** (`confirm-destructive.ts`) — Confirm risky overwrites, removals and destructive commands. Edits to Git-tracked files skip size-based prompts, including files with uncommitted changes; untracked files keep the removal check.
 - **Context Snapshot** (`context/`) — Append-only durable work captures with a bounded, freshly replaced recent-summary appendix after Pi compacts.
 - **Custom Footer** (`custom-footer`) — One line with path, context and model info. Advisor status stays hidden unless unavailable; warnings appear inline.

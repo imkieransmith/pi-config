@@ -1,8 +1,9 @@
 /**
  * Message background colours.
  *
- * Colours user messages, working/thinking/tool rows, and final assistant
+ * Colours user messages, intermediate assistant/tool rows, and final assistant
  * responses without overriding tool renderers such as tool-pills.
+ * Leave loaders alone: Pi also uses them inside the editor's top border.
  */
 
 import { readFileSync, realpathSync } from "node:fs";
@@ -88,7 +89,7 @@ export function patchRender(
 
 // ===========================================================================
 // MONKEY-PATCH (pi internals): this extension overrides the `render()` method on
-// pi's private message/loader components. The CLI bundles those classes into a
+// pi's private message components. The CLI bundles those classes into a
 // hashed chunk, so importing the unbundled files under `dist/modes` would patch
 // different class objects and have no effect. This extension reads the running
 // CLI's main-chunk import, then imports that same module instance.
@@ -96,9 +97,8 @@ export function patchRender(
 // Fragility / maintenance — this WILL break if pi changes any of:
 //   - the `dist/bundle/cli.js` entrypoint shape,
 //   - the main chunk's exported class names (UserMessageComponent,
-//     AssistantMessageComponent, ToolExecutionComponent, BorderedLoader),
+//     AssistantMessageComponent, ToolExecutionComponent),
 //   - those classes' `render(width)` methods,
-//   - BorderedLoader's `loader` field used to reach the private Loader class,
 //   - AssistantMessageComponent's `hasToolCalls` field used to tell an
 //     intermediate working turn from a final response.
 // Failures are made loud on purpose. Re-verify these assumptions on every pi
@@ -137,27 +137,6 @@ function resolvePiRuntimeModuleUrl(): string {
 	return new URL(mainChunkImport[1], pathToFileURL(cliPath)).href;
 }
 
-function resolveLoaderPrototype(
-	BorderedLoader: new (...args: any[]) => any,
-): RenderablePrototype & Record<PropertyKey, unknown> {
-	const probe = new BorderedLoader(
-		{ requestRender() {} },
-		{ fg: (_colour: string, text: string) => text },
-		"",
-		{ cancellable: false },
-	);
-
-	try {
-		const prototype = Object.getPrototypeOf(probe.loader) as RenderablePrototype & Record<PropertyKey, unknown>;
-		if (!prototype?.render) {
-			throw new Error("Could not locate pi's private Loader prototype through BorderedLoader");
-		}
-		return prototype;
-	} finally {
-		probe.dispose();
-	}
-}
-
 export default function (pi: ExtensionAPI) {
   let undo: Array<() => void> = [];
   const restore = () => { for (const dispose of undo) dispose(); undo = []; };
@@ -168,11 +147,10 @@ export default function (pi: ExtensionAPI) {
     const colours = {
       user: hexToBgAnsi(COLOURS.user), work: hexToBgAnsi(COLOURS.work), assistant: hexToBgAnsi(COLOURS.assistant),
     };
-    const { UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent, BorderedLoader } = await import(resolvePiRuntimeModuleUrl());
+    const { UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent } = await import(resolvePiRuntimeModuleUrl());
     undo = [
       patchRender(UserMessageComponent.prototype, "user", colours),
       patchRender(ToolExecutionComponent.prototype, "work", colours),
-      patchRender(resolveLoaderPrototype(BorderedLoader), "work", colours),
       patchRender(AssistantMessageComponent.prototype, (instance: { hasToolCalls?: boolean }) => instance.hasToolCalls ? "work" : "assistant", colours),
     ];
   });
