@@ -23,7 +23,11 @@ test('offline Pi loads all extensions, runs protected tools, reloads and resets 
   });
   await writeFile(join(search, 'normal.ts'), 'ordinary fixture\n');
   await writeFile(join(search, '.env'), 'private fixture synthetic-value\n');
-  assert.equal(spawnSync('git', ['init', '--quiet', workspace]).status, 0);
+  const gitEnv = { ...process.env };
+  for (const key of Object.keys(gitEnv)) if (key.startsWith('GIT_')) delete gitEnv[key];
+  assert.equal(spawnSync('git', ['init', '--quiet', workspace], { env: gitEnv }).status, 0);
+  await writeFile(join(workspace, 'tracked.txt'), 'heading\n' + 'removable content\n'.repeat(50) + 'keep\n');
+  assert.equal(spawnSync('git', ['-C', workspace, 'add', '--', 'tracked.txt'], { env: gitEnv }).status, 0);
   await writeFile(join(workspace, 'package.json'), JSON.stringify({ scripts: { test: 'exit 7' } }));
   const agent = join(workspace, 'agent'); await mkdir(agent);
   const extensions = [];
@@ -42,6 +46,7 @@ test('offline Pi loads all extensions, runs protected tools, reloads and resets 
     PI_HARNESS_FILE: join(search, 'normal.ts'), PI_HARNESS_SEARCH: search,
     PI_HARNESS_REQUESTS: join(workspace, 'requests.jsonl'),
     PI_HARNESS_WRITE: join(workspace, 'written.txt'),
+    PI_HARNESS_TRACKED_EDIT: join(workspace, 'tracked.txt'),
   }, stdio: ['pipe', 'pipe', 'pipe'] });
   let buffer = '', stderr = '', seq = 0;
   const events = [], pending = new Map();
@@ -77,7 +82,7 @@ test('offline Pi loads all extensions, runs protected tools, reloads and resets 
   await prompt('/harness-grant'); assert.equal((await status()).allowed, true);
   await prompt('/harness-reload'); assert.equal((await status()).allowed, false);
   await prompt('/harness-grant'); await request('new_session'); assert.equal((await status()).allowed, false);
-  for (const message of ['read fixture', 'search fixture', 'bash fixture', 'bash failure fixture', 'write fixture', 'rewrite fixture', 'edit fixture', '/plan synthetic planning task']) {
+  for (const message of ['read fixture', 'search fixture', 'bash fixture', 'bash failure fixture', 'write fixture', 'rewrite fixture', 'edit fixture', 'tracked edit fixture', 'tracked removal fixture', '/plan synthetic planning task']) {
     const before = events.length;
     await prompt(message);
     const deadline = Date.now() + 10000;
@@ -85,6 +90,8 @@ test('offline Pi loads all extensions, runs protected tools, reloads and resets 
     assert.ok(events.slice(before).some(e => e.type === 'agent_end'), `No completion: ${JSON.stringify(events.slice(before))}`);
   }
   assert.ok((await readFile(join(workspace, 'written.txt'), 'utf8')).startsWith('third\n'));
+  assert.equal(await readFile(join(workspace, 'tracked.txt'), 'utf8'), 'updated heading\nkeep\n');
+  assert.deepEqual(events.filter(e => e.type === 'extension_ui_request' && e.method === 'select'), [], 'Ordinary tool runs must not request permission');
   const requests = await readFile(join(workspace, 'requests.jsonl'), 'utf8');
   assert.ok(requests.includes('Plan-First Workflow') && requests.includes('synthetic planning task'), requests);
   const messages = await request('get_messages');

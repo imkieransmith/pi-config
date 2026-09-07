@@ -11,6 +11,8 @@
  *     wipefs, dd to /dev/, rsync --delete, shred, privilege escalation, etc.)
  *     are owned by security.ts. Those are intentionally NOT confirmed here, so a
  *     command is never gated by both extensions.
+ *   - Edits to tracked files skip size-based prompts, even with uncommitted
+ *     changes. Full overwrites and deletions keep their stricter checks.
  *   - Confirmations share a per-session allow-list via ./shared/confirm-gate.
  *
  * Original - https://github.com/spences10/my-pi/tree/main/packages/pi-confirm-destructive
@@ -29,7 +31,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 import { existsSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { resolveSecurityPath } from './security/policy.ts';
 import { installSessionAllowReset, requestSessionConfirm } from './shared/confirm-gate.js';
 
@@ -142,6 +144,14 @@ async function get_git_recoverability(
 
 async function is_git_recoverable(cwd: string, path: string): Promise<boolean> {
 	return await get_git_recoverability(cwd, path) === 'tracked-clean';
+}
+
+async function is_git_tracked(absolute: string): Promise<boolean> {
+	// Edit policy trusts tracked files, including uncommitted work. Resolve the
+	// actual file's repository and treat its name literally, not as a path pattern.
+	return await git([
+		'--literal-pathspecs', 'ls-files', '--error-unmatch', '--', absolute,
+	], dirname(absolute)) !== undefined;
 }
 
 function is_todo_planning_note(path: string): boolean {
@@ -377,17 +387,17 @@ async function assess_file_edit(
 	if (removed_chars === 0 || removed_chars - added_chars < 200) {
 		return undefined;
 	}
-	if (path && is_todo_planning_note(path)) return undefined;
-	if (path && session_created_paths.has(await resolveSecurityPath(path, cwd))) {
-		return undefined;
+	if (path) {
+		if (is_todo_planning_note(path)) return undefined;
+		const absolute = await resolveSecurityPath(path, cwd);
+		if (session_created_paths.has(absolute) || await is_git_tracked(absolute)) return undefined;
 	}
-	if (path && await is_git_recoverable(cwd, path)) return undefined;
 
 	return {
 		title: 'Confirm large content removal?',
 		description: `This edit removes ${removed_chars - added_chars} more characters than it adds${path ? ` in ${path}` : ''}.`,
 		reason: path
-			? 'Removes substantial content from a file git cannot fully restore'
+			? 'Removes substantial content from an untracked or unchecked file'
 			: 'Removes substantial file content',
 		allow_key: 'edit:large-removal-risky',
 	};

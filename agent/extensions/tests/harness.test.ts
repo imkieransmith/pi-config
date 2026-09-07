@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { join } from "node:path";
@@ -15,7 +17,7 @@ import { QuestionSchema } from "../ask-user-question/schema.ts";
 import { classifyBash } from "../security/index.ts";
 import { classifyResolvedPath } from "../security/policy.ts";
 import { protectDiscovery } from "../security/search.ts";
-import { assess_bash_command } from "../confirm-destructive.ts";
+import { assess_bash_command, assess_tool_call } from "../confirm-destructive.ts";
 import { installSessionAllowReset, requestSessionConfirm } from "../shared/confirm-gate.ts";
 import { redact_text, redact_value } from "../redact.ts";
 import { registerDiffTools } from "../tool-pills/diff-renderer.ts";
@@ -101,6 +103,43 @@ test("destructive commands are checked without executing them", async () => {
     assert.ok(await assess_bash_command(cmd, "/nonexistent"), cmd);
   }
   for (const cmd of ["git status --short", "git -C /example diff --stat", "printf hello"]) assert.equal(await assess_bash_command(cmd, "/nonexistent"), undefined, cmd);
+});
+
+test("large edits trust dirty tracked files in their own repo but not untracked paths or symlink targets", async t => {
+  const root = await mkdtemp(join(tmpdir(), "pi-tracked-edits-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const repo = join(root, "repo"); await mkdir(join(repo, "src"), { recursive: true });
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
+  const runGit = (...args: string[]) => promisify(execFile)("git", ["-C", repo, "--literal-pathspecs", ...args], { env, timeout: 2000 });
+  await runGit("init", "--quiet");
+  const content = "content to remove\n".repeat(30);
+  const tracked = join(repo, "src", "tracked[1].txt");
+  const untracked = join(repo, "piece[1].txt");
+  await writeFile(tracked, content);
+  await writeFile(join(repo, "piece1.txt"), content);
+  await writeFile(untracked, content);
+  await symlink("piece[1].txt", join(repo, "tracked-link.txt"));
+  await runGit("add", "--", "src/tracked[1].txt", "piece1.txt", "tracked-link.txt");
+  const edit = (path: string, cwd = root) => assess_tool_call({
+    type: "tool_call", toolName: "edit", toolCallId: "test-edit",
+    input: { path, edits: [{ oldText: content, newText: "" }] },
+  }, cwd);
+  // Git's index tracks these files; no fixture commits are needed.
+  assert.equal(await edit(tracked), undefined);
+  await writeFile(tracked, "an earlier agent edit\n" + content);
+  assert.equal(await edit(tracked), undefined);
+  assert.equal(await edit("src/tracked[1].txt", repo), undefined);
+  await symlink(tracked, join(root, "alias.txt"));
+  assert.equal(await edit(join(root, "alias.txt")), undefined);
+  // A glob-like untracked name must not match the tracked piece1.txt.
+  assert.equal((await edit(untracked))?.allow_key, "edit:large-removal-risky");
+  assert.equal((await edit(join(repo, "tracked-link.txt")))?.allow_key, "edit:large-removal-risky");
+  const outside = join(root, "outside.txt"); await writeFile(outside, content);
+  assert.equal((await edit(outside))?.allow_key, "edit:large-removal-risky");
+  // This edit-only exemption must not relax overwrites or deletes.
+  assert.equal((await assess_tool_call({ type: "tool_call", toolName: "write", toolCallId: "test-write", input: { path: tracked, content: "" } }, repo))?.allow_key, "write:risky-overwrite");
+  assert.equal((await assess_bash_command('rm "src/tracked[1].txt"', repo))?.allow_key, "bash:rm-risky");
 });
 
 test("/plan expands the skill and does not force-close a capture", async () => {

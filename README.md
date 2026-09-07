@@ -14,7 +14,7 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Advisor** (`advisor`) — One consultation tool with a required brief, a fixed GPT-6-Astra reviewer, and one usage policy. It receives a bounded snapshot of recent work; `/advisor status` and `/advisor debug` expose diagnostics.
 - **Ask User Question** (`ask-user-question`) — TUI-only multiple-choice and free-text questions. Long headers are accepted and shortened for display.
 - **Colour Messages** (`colour-messages`) — Background colours for user, working, and final assistant rows.
-- **Confirm Destructive** (`confirm-destructive.ts`) — Confirm destructive tool calls and bash commands before they run.
+- **Confirm Destructive** (`confirm-destructive.ts`) — Confirm risky overwrites, removals and destructive commands. Edits to Git-tracked files skip size-based prompts, including files with uncommitted changes; untracked files keep the removal check.
 - **Context Snapshot** (`context/`) — Append-only durable work captures with a bounded, freshly replaced recent-summary appendix after Pi compacts.
 - **Custom Footer** (`custom-footer`) — One line with path, context and model info. Advisor status stays hidden unless unavailable; warnings appear inline.
 - **Evidence Store** (`evidence.ts`) — Validated durable snippets with deduplication, paginated discovery, exact final-citation verification, and TUI-only proof.

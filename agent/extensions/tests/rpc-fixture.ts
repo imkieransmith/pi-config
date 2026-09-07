@@ -19,6 +19,8 @@ export default function (pi: ExtensionAPI) {
         "write fixture": { name: "write", arguments: { path: process.env.PI_HARNESS_WRITE!, content: `first\n${tail}\n` } },
         "rewrite fixture": { name: "write", arguments: { path: process.env.PI_HARNESS_WRITE!, content: `second\n${tail}\n` } },
         "edit fixture": { name: "edit", arguments: { path: process.env.PI_HARNESS_WRITE!, edits: [{ oldText: "second", newText: "third" }] } },
+        "tracked edit fixture": { name: "edit", arguments: { path: process.env.PI_HARNESS_TRACKED_EDIT!, edits: [{ oldText: "heading", newText: "updated heading" }] } },
+        "tracked removal fixture": { name: "edit", arguments: { path: process.env.PI_HARNESS_TRACKED_EDIT!, edits: [{ oldText: "removable content\n".repeat(50), newText: "" }] } },
         "bash fixture": { name: "bash", arguments: { command: "git status --short" } },
         "bash failure fixture": { name: "bash", arguments: { command: "npm test" } },
         "read fixture": { name: "read", arguments: { path: process.env.PI_HARNESS_FILE! } },
