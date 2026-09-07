@@ -5,6 +5,31 @@ import { appendFileSync } from "node:fs";
 
 // Explicitly loaded only by the offline integration test, never a normal extension entrypoint.
 export default function (pi: ExtensionAPI) {
+  let advisorAttempts = 0;
+  // Synthetic fixed advisor provider. Never send a request to a real service.
+  pi.registerProvider("openai-codex", {
+    api: "openai-completions", apiKey: "synthetic-advisor", baseUrl: "http://127.0.0.1:1",
+    models: [{ id: "gpt-6-astra", name: "Offline advisor", reasoning: true, input: ["text"], contextWindow: 200_000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+    streamSimple(model, _context, options) {
+      if (options?.reasoning !== "high") throw new Error("Unexpected advisor effort");
+      advisorAttempts++;
+      const stream = createAssistantMessageEventStream();
+      const failed = advisorAttempts === 1;
+      const message: AssistantMessage = {
+        role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(),
+        content: failed ? [] : [{ type: "text", text: "Offline advisor retry succeeded" }],
+        stopReason: failed ? "error" : "stop", errorMessage: failed ? "WebSocket error" : undefined,
+        usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", partial: message });
+        if (failed) stream.push({ type: "error", reason: "error", error: message });
+        else stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+      });
+      return stream;
+    },
+  });
   pi.registerProvider("harness-test", {
     api: "openai-completions", apiKey: "synthetic-test-auth", baseUrl: "http://127.0.0.1:1",
     models: [{ id: "test", name: "Offline test", reasoning: false, input: ["text"], contextWindow: 200_000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
@@ -15,6 +40,7 @@ export default function (pi: ExtensionAPI) {
       if (process.env.PI_HARNESS_REQUESTS) appendFileSync(process.env.PI_HARNESS_REQUESTS, JSON.stringify({ prompt, lastTool: last?.role === "toolResult" ? { name: last.toolName, content: last.content } : undefined }) + "\n");
       const tail = Array.from({ length: 20 }, (_, index) => `line ${index}: Unicode 界 🙂`).join("\n");
       const calls: Record<string, { name: string; arguments: Record<string, unknown> }> = {
+        "advisor fixture": { name: "advisor", arguments: { brief: "Check synthetic transport recovery without a real model" } },
         "question fixture": { name: "ask_user_question", arguments: { questions: [{ header: "A normal heading longer than twelve characters", question: "Select the synthetic test answer", options: [{ label: "Yes" }, { label: "No" }], multiSelect: false }] } },
         "write fixture": { name: "write", arguments: { path: process.env.PI_HARNESS_WRITE!, content: `first\n${tail}\n` } },
         "rewrite fixture": { name: "write", arguments: { path: process.env.PI_HARNESS_WRITE!, content: `second\n${tail}\n` } },

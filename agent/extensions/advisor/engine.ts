@@ -11,7 +11,7 @@
 
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { Api, ImageContent, Message, Model, StopReason, TextContent, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
+import { isContextOverflow, retryAssistantCall, type Api, type AssistantMessage, type ImageContent, type Message, type Model, type StopReason, type TextContent, type ThinkingLevel, type Usage } from "@earendil-works/pi-ai";
 import {
 	convertToLlm,
 	getAgentDir,
@@ -21,11 +21,12 @@ import {
 	type SessionEntry,
 	type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
-import { redact_value } from "../redact.ts";
+import { redact_text, redact_value } from "../redact.ts";
 import { renderAdvisorBrief } from "./brief.ts";
 
 export const ADVISOR_TOOL_NAME = "advisor";
 const CONTEXT_SNAPSHOT_STATE_TYPE = "context-snapshot-state";
+const RETRY_POLICY = { enabled: true, maxRetries: 2, baseDelayMs: 2_000 };
 
 // Per-section and total caps. Expressed in chars; the rough token estimate is
 // chars/4. Targets keep a typical payload around ~10-15k tokens; the total cap
@@ -423,6 +424,7 @@ export interface AdvisorDetails {
 	latencyMs?: number;
 	debugLog?: string;
 	callNumber?: number;
+	requestAttempts?: number;
 }
 
 export interface RunAdvisorParams {
@@ -442,6 +444,17 @@ function extractText(response: Message): string {
 		.trim();
 }
 
+function sumUsage(total: Usage | undefined, next: Usage): Usage {
+	const sum = { ...next, cost: { ...next.cost } };
+	if (!total) return sum;
+	for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) sum[key] += total[key];
+	for (const key of ["cacheWrite1h", "reasoning"] as const) {
+		if (total[key] !== undefined || next[key] !== undefined) sum[key] = (total[key] ?? 0) + (next[key] ?? 0);
+	}
+	for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) sum.cost[key] += total.cost[key];
+	return sum;
+}
+
 export async function runAdvisor(
 	ctx: ExtensionContext,
 	pi: ExtensionAPI,
@@ -452,12 +465,24 @@ export async function runAdvisor(
 	s.lastCallAt = Date.now();
 	const callNumber = s.attemptedCalls;
 	const started = Date.now();
+	const cwd = ctx.cwd;
+	const sessionFile = ctx.sessionManager.getSessionFile();
 
 	const advisorLabel = modelKey(params.model) ?? `${params.model.provider}/${params.model.id}`;
 	const activeModel = modelKey(ctx.model) ?? "unknown";
 	let payloadChars = 0;
 	let estimatedPayloadTokens = 0;
 	let imageCount = 0;
+	let requestAttempts = 0;
+	let usage: Usage | undefined;
+
+	const failedResponse = (error: unknown): AssistantMessage => ({
+		role: "assistant", content: [], api: params.model.api, provider: params.model.provider, model: params.model.id,
+		timestamp: Date.now(),
+		stopReason: params.signal?.aborted || (error instanceof Error && error.name === "AbortError") ? "aborted" : "error",
+		errorMessage: error instanceof Error ? error.message : String(error),
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+	});
 
 	const baseDetails = (): AdvisorDetails => ({
 		advisorModel: advisorLabel,
@@ -468,14 +493,16 @@ export async function runAdvisor(
 		imageCount,
 		debugLog: debugLogPath(),
 		callNumber,
+		requestAttempts,
+		usage,
 	});
 
 	const finishDebug = (record: Record<string, unknown>) => {
 		appendDebug({
 			timestamp: new Date().toISOString(),
 			callNumber,
-			sessionFile: ctx.sessionManager.getSessionFile?.(),
-			cwd: ctx.cwd,
+			sessionFile,
+			cwd,
 			advisorModel: advisorLabel,
 			activeModel,
 			effort: params.effort,
@@ -483,20 +510,14 @@ export async function runAdvisor(
 			estimatedPayloadTokens,
 			imageCount,
 			latencyMs: Date.now() - started,
+			requestAttempts,
+			usage,
 			...record,
 		});
 	};
 
 	try {
-		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(params.model);
-		if (!auth.ok || !auth.apiKey) {
-			const error = !auth.ok
-				? auth.error
-				: `No request auth available for ${params.model.provider}. If using subscription/OAuth, run /login ${params.model.provider}; otherwise add that provider's API key.`;
-			s.lastError = error;
-			finishDebug({ success: false, error });
-			return { content: [{ type: "text", text: `advisor failed: ${error}` }], details: { ...baseDetails(), errorMessage: error } };
-		}
+		if (params.signal?.aborted) throw new Error("advisor call was aborted");
 
 		const payload = buildAdvisorPayload(ctx, pi, params.brief);
 		payloadChars = payload.stats.chars;
@@ -513,13 +534,45 @@ export async function runAdvisor(
 			details: baseDetails(),
 		});
 
-		const provider = ctx.modelRegistry.getProvider(params.model.provider);
-		if (!provider) throw new Error(`Provider ${params.model.provider} is unavailable`);
-		const response = await provider.streamSimple(
-			params.model,
-			{ systemPrompt: ADVISOR_SYSTEM_PROMPT, messages: payload.messages, tools: [] },
-			{ apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: params.signal, reasoning: params.effort },
-		).result();
+		const response = await retryAssistantCall(async () => {
+			if (params.signal?.aborted) return failedResponse("advisor call was aborted");
+			// Resolve auth again for each attempt, preserving provider wrappers and
+			// refreshed headers/environment. Setup errors stop without retrying.
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(params.model);
+			if (!auth.ok || !auth.apiKey) throw new Error(!auth.ok ? auth.error : `No request auth available for ${params.model.provider}. Check /login or the provider's API key.`);
+			const provider = ctx.modelRegistry.getProvider(params.model.provider);
+			if (!provider) throw new Error(`Provider ${params.model.provider} is unavailable`);
+			if (params.signal?.aborted) return failedResponse("advisor call was aborted");
+			requestAttempts += 1;
+			let result: AssistantMessage;
+			try {
+				result = await provider.streamSimple(
+					params.model,
+					{ systemPrompt: ADVISOR_SYSTEM_PROMPT, messages: payload.messages, tools: [] },
+					{ apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: params.signal, reasoning: params.effort },
+				).result();
+				usage = sumUsage(usage, result.usage);
+			} catch (error) {
+				// The native helper retries error messages, not thrown exceptions.
+				result = failedResponse(error);
+			}
+			if (params.signal?.aborted) return { ...result, stopReason: "aborted" };
+			// Overflow needs a different request, not another identical attempt.
+			if (isContextOverflow(result, params.model.contextWindow)) throw new Error(result.errorMessage || "Advisor context limit exceeded");
+			return result;
+		}, RETRY_POLICY, params.signal, {
+			onRetryScheduled(attempt, maxRetries, delayMs, errorMessage) {
+				const error = truncateText(redact_text(errorMessage).redacted, 300);
+				params.onUpdate?.({
+					content: [{ type: "text", text: `Advisor retry ${attempt}/${maxRetries} in ${delayMs / 1_000}s: ${error}` }],
+					details: baseDetails(),
+				});
+				finishDebug({ event: "retry", attempt, maxRetries, delayMs, error });
+			},
+			onRetryAttemptStart() {
+				params.onUpdate?.({ content: [{ type: "text", text: "Retrying advisor…" }], details: baseDetails() });
+			},
+		});
 
 		const text = extractText(response);
 		const latencyMs = Date.now() - started;
@@ -528,26 +581,26 @@ export async function runAdvisor(
 		if (!success) {
 			const error = response.stopReason === "aborted" ? "advisor call was aborted" : response.errorMessage || "advisor returned no text";
 			s.lastError = error;
-			finishDebug({ success: false, stopReason: response.stopReason, error, usage: response.usage, responseChars: text.length });
+			finishDebug({ success: false, stopReason: response.stopReason, error, responseChars: text.length });
 			return {
 				content: [{ type: "text", text: `advisor failed: ${error}` }],
-				usage: response.usage,
-			details: { ...baseDetails(), responseChars: text.length, usage: response.usage, stopReason: response.stopReason, errorMessage: error, latencyMs },
+				usage,
+				details: { ...baseDetails(), responseChars: text.length, stopReason: response.stopReason, errorMessage: error, latencyMs },
 			};
 		}
 
 		s.successfulCalls += 1;
 		s.lastError = undefined;
-		finishDebug({ success: true, stopReason: response.stopReason, usage: response.usage, responseChars: text.length });
+		finishDebug({ success: true, stopReason: response.stopReason, responseChars: text.length });
 		return {
 			content: [{ type: "text", text }],
-			usage: response.usage,
-			details: { ...baseDetails(), responseChars: text.length, usage: response.usage, stopReason: response.stopReason, latencyMs },
+			usage,
+			details: { ...baseDetails(), responseChars: text.length, stopReason: response.stopReason, latencyMs },
 		};
 	} catch (err) {
-		const error = err instanceof Error ? err.message : String(err);
+		const error = params.signal?.aborted ? "advisor call was aborted" : err instanceof Error ? err.message : String(err);
 		s.lastError = error;
 		finishDebug({ success: false, error });
-		return { content: [{ type: "text", text: `advisor threw: ${error}` }], details: { ...baseDetails(), errorMessage: error } };
+		return { content: [{ type: "text", text: `advisor failed: ${error}` }], usage, details: { ...baseDetails(), errorMessage: error } };
 	}
 }

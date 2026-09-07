@@ -11,7 +11,7 @@ The code here is intended as a working personal config rather than a polished pa
 This repo is a personal Pi setup: agent-facing extensions, skills, and UI helpers that are loaded into Pi sessions.
 
 ### Extensions
-- **Advisor** (`advisor`) — One consultation tool with a required brief, a fixed GPT-6-Astra reviewer, and one usage policy. It receives a bounded snapshot of recent work; `/advisor status` and `/advisor debug` expose diagnostics.
+- **Advisor** (`advisor`) — One consultation tool with a required brief and fixed GPT-6-Astra reviewer. It receives a bounded snapshot of recent work and retries transient errors up to twice (after 2s and 4s), using Pi's retry helper. Progress shows retries; cancellation stops them. Reported usage includes failed attempts. `/advisor status` and `/advisor debug` expose diagnostics.
 - **Ask User Question** (`ask-user-question`) — TUI-only multiple-choice and free-text questions. Long headers are accepted and shortened for display.
 - **Colour Messages** (`colour-messages`) — Background colours for user, working, and final assistant rows.
 - **Confirm Destructive** (`confirm-destructive.ts`) — Confirm risky overwrites, removals and destructive commands. Edits to Git-tracked files skip size-based prompts, including files with uncommitted changes; untracked files keep the removal check.

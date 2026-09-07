@@ -82,7 +82,7 @@ test('offline Pi loads all extensions, runs protected tools, reloads and resets 
   await prompt('/harness-grant'); assert.equal((await status()).allowed, true);
   await prompt('/harness-reload'); assert.equal((await status()).allowed, false);
   await prompt('/harness-grant'); await request('new_session'); assert.equal((await status()).allowed, false);
-  for (const message of ['read fixture', 'search fixture', 'bash fixture', 'bash failure fixture', 'write fixture', 'rewrite fixture', 'edit fixture', 'tracked edit fixture', 'tracked removal fixture', '/plan synthetic planning task']) {
+  for (const message of ['read fixture', 'search fixture', 'bash fixture', 'bash failure fixture', 'write fixture', 'rewrite fixture', 'edit fixture', 'tracked edit fixture', 'tracked removal fixture', 'advisor fixture', '/plan synthetic planning task']) {
     const before = events.length;
     await prompt(message);
     const deadline = Date.now() + 10000;
@@ -99,6 +99,11 @@ test('offline Pi loads all extensions, runs protected tools, reloads and resets 
   assert.ok(serialized.includes('ordinary fixture'), serialized);
   assert.ok(serialized.includes('package.json'), serialized);
   assert.ok(serialized.includes('Command exited with code 7'), serialized);
+  assert.ok(serialized.includes('Offline advisor retry succeeded'), serialized);
+  const advice = messages.data.messages.find(message => message.role === 'toolResult' && message.toolName === 'advisor');
+  assert.equal(advice.details.requestAttempts, 2);
+  assert.equal(advice.usage.input, 20); assert.equal(advice.usage.output, 4);
+  assert.ok(JSON.stringify(events).includes('Advisor retry 1/2 in 2s'));
   assert.ok(!serialized.includes('private fixture') && !serialized.includes('synthetic-value'), serialized);
   const parentFile = (await status()).sessionFile;
   assert.equal(typeof parentFile, 'string');
