@@ -14,6 +14,7 @@
  */
 
 import type {
+  CustomEntry,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
@@ -36,7 +37,6 @@ const SUMMARY_CAP = 5000;
 const TOOL_OUTPUT_CAP = 6000;
 
 type SnapshotAction = "start" | "finish" | "discard" | "status" | "list";
-type LegacySnapshotAction = "save" | "restore" | "cancel";
 
 type SnapshotStateEvent =
   | {
@@ -156,7 +156,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function isStateEntry(entry: SessionEntry): boolean {
+function isStateEntry(entry: SessionEntry): entry is CustomEntry {
   return entry.type === "custom" && entry.customType === STATE_CUSTOM_TYPE;
 }
 
@@ -233,7 +233,7 @@ export function startCapture(pi: ExtensionAPI, ctx: SnapshotContext, label: stri
     id: id("c"),
     label: cleanLabel(label),
     createdAt: now(),
-    leafId: ctx.sessionManager.getLeafId(),
+    leafId: ctx.sessionManager.getLeafId() ?? undefined,
     changesObserved: false,
   };
 
@@ -449,21 +449,12 @@ function formatCommandHelp(): string {
   ].join("\n");
 }
 
-function normalizeLegacyAction(action: string): string {
-  const aliases: Record<LegacySnapshotAction, SnapshotAction> = {
-    save: "start",
-    restore: "finish",
-    cancel: "discard",
-  };
-  return aliases[action as LegacySnapshotAction] ?? action;
-}
-
 function parseCommand(args: string): { action: string; rest: string } {
   const trimmed = (args ?? "").trim();
   if (!trimmed) return { action: "help", rest: "" };
 
   const [rawAction, ...rest] = trimmed.split(/\s+/);
-  return { action: normalizeLegacyAction(rawAction.toLowerCase()), rest: rest.join(" ") };
+  return { action: rawAction.toLowerCase(), rest: rest.join(" ") };
 }
 
 async function runCommand(
@@ -535,20 +526,27 @@ export default function (pi: ExtensionAPI) {
 
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
     if (!auth.ok) throw new Error(auth.error);
-    if (!auth.apiKey) {
-      throw new Error(`No API key available for context snapshot compaction with ${ctx.model.provider}`);
-    }
 
+    const provider = ctx.modelRegistry.getProvider(ctx.model.provider);
+    if (!provider) throw new Error(`Provider ${ctx.model.provider} is unavailable`);
+
+    const model = auth.baseUrl ? { ...ctx.model, baseUrl: auth.baseUrl } : ctx.model;
+    const headers = auth.headers
+      ? Object.fromEntries(Object.entries(auth.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+      : undefined;
     const compaction = await runCompaction(
       {
         ...event.preparation,
         previousSummary,
       },
-      ctx.model,
+      model,
       auth.apiKey,
-      auth.headers,
+      headers,
       event.customInstructions,
       event.signal,
+      ctx.thinkingLevel,
+      provider.streamSimple.bind(provider),
+      auth.env,
     );
 
     return {
@@ -642,11 +640,6 @@ export default function (pi: ExtensionAPI) {
         description: "Allow finish when the capture observed file or command mutations. Use only after the durable summary accounts for those changes.",
       })),
     }),
-    prepareArguments(args) {
-      if (!isRecord(args) || typeof args.action !== "string") return args;
-      const action = normalizeLegacyAction(args.action);
-      return action === args.action ? args : { ...args, action };
-    },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const action = params.action as SnapshotAction;
 

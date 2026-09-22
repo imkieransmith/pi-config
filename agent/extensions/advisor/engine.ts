@@ -21,7 +21,7 @@ import {
 	type SessionEntry,
 	type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
-import { redact_text, redact_value } from "../redact.ts";
+import { redact_text, redact_value } from "./redact.ts";
 import { renderAdvisorBrief } from "./brief.ts";
 
 export const ADVISOR_TOOL_NAME = "advisor";
