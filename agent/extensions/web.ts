@@ -12,13 +12,11 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_MAX_LINES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { redact_text } from "./redact.ts";
-import { pill } from "./tool-pills/pill.ts";
-import { getText, renderTextResult } from "./tool-pills/renderers.ts";
+import { countNote, getText, row } from "./tool-pills/renderers.ts";
 
 export const ENV_FILE = join(homedir(), ".pi", ".env");
 const TIMEOUT_MS = 60_000;
@@ -101,8 +99,6 @@ export async function limitPage(page: string, url: string): Promise<{ text: stri
   return { text: `${cut.content}\n\n${note}`, fullPath };
 }
 
-const callText = (name: string, detail: string, theme: Theme) => new Text(`${pill(name, theme)} ${theme.fg("accent", detail)}`, 0, 0);
-
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_search",
@@ -116,8 +112,11 @@ export default function (pi: ExtensionAPI) {
       const results = await jinaSearch(query, signal);
       return { content: [{ type: "text", text: redact_text(formatResults(results)).redacted }], details: { count: results.length } };
     },
-    renderCall: (args, theme) => callText("web_search", args.query, theme),
-    renderResult: (result, { expanded }, theme) => renderTextResult(getText(result), expanded, theme),
+    ...row<{ query: string }>({
+      name: "web_search",
+      call: (args, theme) => theme.fg("accent", args.query ?? ""),
+      note: result => countNote(result.details?.count ?? 0, "result"),
+    }),
   });
 
   pi.registerTool({
@@ -134,7 +133,11 @@ export default function (pi: ExtensionAPI) {
       const { text, fullPath } = await limitPage(await jinaRead(url, signal), url);
       return { content: [{ type: "text", text: redact_text(text).redacted }], details: { fullPath } };
     },
-    renderCall: (args, theme) => callText("web_fetch", args.url, theme),
-    renderResult: (result, { expanded }, theme) => renderTextResult(getText(result), expanded, theme),
+    ...row<{ url: string }>({
+      name: "web_fetch",
+      call: (args, theme) => theme.fg("accent", args.url ?? ""),
+      note: result => result.content.some(c => c.type === "image") ? "image"
+        : `${countNote(getText(result).split("\n").length, "line")}${result.details?.fullPath ? ", truncated" : ""}`,
+    }),
   });
 }

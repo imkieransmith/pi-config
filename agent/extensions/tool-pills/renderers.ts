@@ -1,82 +1,114 @@
-import type { AgentToolResult, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { highlightCode, keyHint } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+/**
+ * One-line tool rows: pill, call text and a short note on the right.
+ *
+ * Output stays hidden until the row is expanded. In fullscreen mode Pi toggles
+ * a single row on left click; Ctrl+O toggles every row.
+ */
+import type { AgentToolResult, ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { highlightCode } from "@earendil-works/pi-coding-agent";
+import { Box, type Component, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { redact_value } from "../redact.ts";
-import { pill } from "./pill.js";
+import { pill } from "./pill.ts";
 
-/** Max lines shown in collapsed (non-expanded) result view. */
-const COLLAPSED_MAX_LINES = 15;
+type Result = AgentToolResult<any>;
+/** Pi passes this to renderers; the package doesn't export its type. `state` is shared by one row's call and result. */
+type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2] & { state: { note?: string } };
 
-/** Extract the first text content from a tool result. */
-export function getText(result: AgentToolResult<unknown>): string | undefined {
-	const c = result.content.find((c) => c.type === "text");
-	return c?.type === "text" ? c.text : undefined;
+export type RowSpec<Args = any> = {
+  name: string;
+  /** Text after the pill. May span lines; collapsed rows show the first line only. */
+  call: (args: Args, theme: Theme) => string;
+  /** Short note for the right edge of a successful row. Defaults to the output's line count. */
+  note?: (result: Result, args: Args) => string;
+  /** Expanded output. Defaults to the text output. */
+  body?: (result: Result, theme: Theme, args: Args) => string;
+};
+
+/** First text block of a tool result. */
+export function getText(result: Result): string {
+  const c = result.content.find(c => c.type === "text");
+  return c?.type === "text" ? c.text : "";
 }
 
-/** Render tool output text with collapsed truncation + expand hint. */
-export function renderTextResult(
-	text: string | undefined,
-	expanded: boolean,
-	theme: Theme,
-	mode: "head" | "tail" = "head",
-): Text {
-	if (!text || !text.trim()) return new Text("", 0, 0);
-
-	const lines = text.split("\n");
-
-	if (expanded || lines.length <= COLLAPSED_MAX_LINES) {
-		const output = lines.map((l) => theme.fg("toolOutput", l)).join("\n");
-		return new Text(`\n${output}`, 0, 0);
-	}
-
-	const hidden = lines.length - COLLAPSED_MAX_LINES;
-	const hint = theme.fg("dim", `... ${hidden} more lines (${keyHint("app.tools.expand", "to expand")})`);
-
-	if (mode === "tail") {
-		const visible = lines.slice(-COLLAPSED_MAX_LINES);
-		const output = visible.map((l) => theme.fg("toolOutput", l)).join("\n");
-		return new Text(`\n${hint}\n${output}`, 0, 0);
-	}
-
-	const visible = lines.slice(0, COLLAPSED_MAX_LINES);
-	const output = visible.map((l) => theme.fg("toolOutput", l)).join("\n");
-	return new Text(`\n${output}\n${hint}`, 0, 0);
+export function countNote(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
 }
 
-/** Helper to register a basic tool (ls, read, find, grep) with pill + collapsed output. */
-export function wrapBasicTool(
-	pi: ExtensionAPI,
-	orig: any,
-	name: string,
-	mkCallText: (args: any, theme: Theme) => string,
-	mode: "head" | "tail" = "head",
-): void {
-	pi.registerTool({
-		...orig,
-		parameters: { ...orig.parameters },
-    async execute(id, args, signal, _update, ctx) {
+function defaultNote(result: Result): string {
+  if (result.content.some(c => c.type === "image")) return "image";
+  const text = getText(result).trimEnd();
+  return text ? countNote(text.split("\n").length, "line") : "no output";
+}
+
+function errorNote(result: Result): string {
+  const text = getText(result);
+  const exit = text.match(/exited with code (\d+)/);
+  if (exit) return `exit ${exit[1]}`;
+  return /timed out/.test(text) ? "timed out" : "error";
+}
+
+/** A component that draws whatever lines the callback returns for the given width. */
+function lines(make: (width: number) => string[]): Component {
+  return { render: make, invalidate() {} };
+}
+
+function tinted(ctx: RenderContext, theme: Theme, child: Component): Box {
+  const role = ctx.isPartial ? "toolPendingBg" : ctx.isError ? "toolErrorBg" : "toolSuccessBg";
+  // truncateToWidth ends cut text with a full reset, which would drop the tint for the rest of the line.
+  const box = new Box(1, 0, text => theme.bg(role, text.replaceAll("\x1b[0m", `\x1b[0m${theme.getBgAnsi(role)}`)));
+  box.addChild(child);
+  return box;
+}
+
+function headerLines(head: string, note: string, width: number, expanded: boolean, theme: Theme): string[] {
+  const noteWidth = visibleWidth(note);
+  const room = Math.max(10, width - (noteWidth ? noteWidth + 2 : 0));
+  const [first, ...rest] = head.split("\n");
+  const lines = expanded
+    ? head.split("\n").flatMap(line => wrapTextWithAnsi(line, room))
+    : [truncateToWidth(rest.length ? `${first}${theme.fg("dim", " …")}` : first, room)];
+  lines[0] += " ".repeat(Math.max(1, width - visibleWidth(lines[0]) - noteWidth)) + note;
+  return lines;
+}
+
+/** renderShell/renderCall/renderResult for a compact row. Spread into a tool definition. */
+export function row<Args>(spec: RowSpec<Args>) {
+  return {
+    renderShell: "self" as const,
+    renderCall(args: Args, theme: Theme, ctx: RenderContext): Component {
+      return tinted(ctx, theme, lines(width => {
+        // renderResult fills the note later in the same update, before this draws.
+        const done = !ctx.isPartial;
+        const text = [ctx.state.note, done ? (ctx.expanded ? "▾" : "▸") : ""].filter(Boolean).join(" ");
+        const note = theme.fg(ctx.isError ? "error" : "dim", text);
+        return headerLines(`${pill(spec.name, theme)} ${spec.call(args, theme)}`, note, width, ctx.expanded, theme);
+      }));
+    },
+    renderResult(result: Result, { expanded }: { expanded: boolean }, theme: Theme, ctx: RenderContext): Component {
+      ctx.state.note = ctx.isPartial ? undefined : ctx.isError ? errorNote(result) : (spec.note ?? defaultNote)(result, ctx.args as Args);
+      if (!expanded) return new Text("", 0, 0);
+      const body = ctx.isError
+        ? theme.fg("error", getText(result).trim())
+        : spec.body ? spec.body(result, theme, ctx.args as Args) : theme.fg("toolOutput", getText(result).trimEnd());
+      return tinted(ctx, theme, new Text(body, 0, 0));
+    },
+  };
+}
+
+/** Registers a built-in read-only tool (ls, read, find, grep) as a compact, redacted row. */
+export function wrapBasicTool<Args>(pi: ExtensionAPI, orig: any, spec: RowSpec<Args>): void {
+  pi.registerTool({
+    ...orig,
+    parameters: { ...orig.parameters },
+    async execute(id: string, args: Args, signal: AbortSignal | undefined, _update: unknown, ctx: unknown) {
       const result = await orig.execute(id, args, signal, undefined, ctx);
       return { ...result, content: redact_value(result.content), details: redact_value(result.details) };
     },
-		renderCall(args: any, theme: Theme, _ctx: any) {
-			return new Text(pill(name, theme) + " " + mkCallText(args, theme), 0, 0);
-		},
-		renderResult(result: any, { expanded }: { expanded: boolean }, theme: Theme, _ctx: any) {
-			return renderTextResult(getText(result), expanded, theme, mode);
-		},
-	});
+    ...row(spec),
+  });
 }
 
-export function renderBashCall(args: any, theme: Theme): Text {
-	const cmd = args.command ?? "";
-	const highlighted = highlightCode(cmd, "bash").join("\n");
-	const isMultiLine = cmd.includes("\n") || cmd.length > 80;
-	if (isMultiLine) {
-		return new Text(pill("bash", theme) + "\n" + highlighted, 0, 0);
-	}
-	return new Text(pill("bash", theme) + " " + highlighted, 0, 0);
-}
-
-export function renderBashResult(result: any, { expanded }: { expanded: boolean }, theme: Theme): Text {
-	return renderTextResult(getText(result), expanded, theme, "tail");
-}
+export const bashRow = row<{ command?: string }>({
+  name: "bash",
+  call: args => highlightCode(args.command ?? "", "bash").join("\n"),
+});

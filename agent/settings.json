@@ -8,5 +8,7 @@
   "quietStartup": true,
   "packages": [
     "npm:@gotgenes/pi-anthropic-auth"
-  ]
+  ],
+  "enableInstallTelemetry": false,
+  "tuiMode": "fullscreen"
 }
