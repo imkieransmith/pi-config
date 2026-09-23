@@ -20,7 +20,7 @@ description: >
 
 Evidence is required when the claim originates from outside the current session — retrieved from web search, a fetched page, a local file you read, or recalled from training. Specifically:
 
-- Any snippet returned by the `web` skill (search or fetch).
+- Any snippet returned by `web_search` or `web_fetch`.
 - A name, date, number, version, price, or current status of a real entity.
 - A claim starting with "according to", "as of", "currently", "recently".
 - A quote or paraphrase of someone else's words.

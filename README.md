@@ -29,9 +29,10 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Standalone Working** (`standalone-working.ts`) - Keeps the working status on its own row above the input, using Pi's native editor without an embedded border indicator.
 - **Superset Hooks** (`superset-hooks.ts`) — Emit Superset lifecycle hooks so the host shows a working indicator.
 - **Tool Pills** (`tool-pills`) — Compact tool rendering, native edit diffs and bounded write previews.
+- **Web** (`web.ts`) — `web_search` and `web_fetch` tools via Jina. Search needs `JINA_API_KEY` in the environment or `~/.pi/.env`; fetch works without it. Long pages show the first 20KB and save the full text under `/tmp`.
 
 ### Skills
-Skills live under `agent/skills/` and provide task-specific instructions that agents load on demand, such as evidence capture, web search/page reading, and structured planning.
+Skills live under `agent/skills/` and provide task-specific instructions that agents load on demand, such as evidence capture and structured planning.
 
 ## Install
 ```bash

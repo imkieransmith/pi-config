@@ -15,6 +15,8 @@ const TOOL_ROLES: Record<string, string> = {
 	write: "accent",
 	create: "accent",
 	edit: "warning",
+	web_search: "mdLink",
+	web_fetch: "mdLink",
 };
 
 /** Render an inverted-colour pill badge: ` name ` */
