@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getPackageDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import colourMessages from "../colour-messages/index.ts";
+import colourMessages, { paintLine, patchRender } from "../colour-messages/index.ts";
 
 // Use the same bundled classes as the CLI, not unbundled lookalikes.
 test("message colours leave the native shared loader unchanged across startup and reload", async t => {
@@ -29,11 +29,36 @@ test("message colours leave the native shared loader unchanged across startup an
     const hooks = new Map<string, Function>();
     colourMessages({ on: (event: string, fn: Function) => hooks.set(event, fn) } as unknown as ExtensionAPI);
     shutdown = () => hooks.get("session_shutdown")!();
-    await hooks.get("session_start")!({}, { mode: "tui" });
+    await hooks.get("session_start")!({}, { mode: "tui", ui: { theme: { getBgAnsi: () => "\x1b[48;2;1;2;3m" } } });
     assert.notEqual(runtime.UserMessageComponent.prototype.render, userRender, "message colours still load");
     assert.equal(loaderPrototype.render, nativeRender, "The shared Loader also renders the inline editor status; do not wrap or pad it");
     assert.deepEqual(widths.map(width => probe.loader.render(width)), baseline);
     shutdown();
     assert.equal(runtime.UserMessageComponent.prototype.render, userRender);
   }
+});
+
+test("user messages swap Pi's background for ours across the whole line", () => {
+  const pi = "\x1b[48;2;232;232;232m", ours = "\x1b[48;2;244;238;226m";
+  const line = paintLine(`${pi} hi \x1b[49m`, 8, ours, pi);
+  assert.ok(!line.includes(pi));
+  assert.equal(line, `${ours}${ours} hi ${ours}    \x1b[49m`);
+});
+
+test("tool rows can drop Pi's blank line above them", () => {
+  const proto: any = { render: () => ["", "row"] };
+  const undo = patchRender(proto, "work", { user: "", work: "", assistant: "" }, { dropLeadingBlank: true });
+  assert.deepEqual(proto.render(3).map((l: string) => l.replace(/\x1b\[[0-9;]*m/g, "")), ["row"]);
+  undo();
+  assert.deepEqual(proto.render(3), ["", "row"]);
+});
+
+test("endWithBlank adds one blank line only when chosen and needed", () => {
+  const proto: any = { render: function (this: any) { return this.lines; } };
+  const undo = patchRender(proto, "work", { user: "", work: "", assistant: "" }, { endWithBlank: (i: any) => i.hasToolCalls });
+  const strip = (lines: string[]) => lines.map(l => l.replace(/\x1b\[[0-9;]*m/g, "").trim());
+  assert.deepEqual(strip(proto.render.call({ lines: ["", "thinking"], hasToolCalls: true }, 10)), ["", "thinking", ""]);
+  assert.deepEqual(strip(proto.render.call({ lines: ["", "thinking", ""], hasToolCalls: true }, 10)), ["", "thinking", ""]);
+  assert.deepEqual(strip(proto.render.call({ lines: ["", "final"], hasToolCalls: false }, 10)), ["", "final"]);
+  undo();
 });

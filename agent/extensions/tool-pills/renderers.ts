@@ -6,13 +6,13 @@
  */
 import type { AgentToolResult, ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { highlightCode } from "@earendil-works/pi-coding-agent";
-import { Box, type Component, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Box, type Component, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { redact_value } from "../redact.ts";
 import { pill } from "./pill.ts";
 
 type Result = AgentToolResult<any>;
 /** Pi passes this to renderers; the package doesn't export its type. `state` is shared by one row's call and result. */
-type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2] & { state: { note?: string } };
+type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2] & { state: { note?: string; hasBody?: boolean } };
 
 export type RowSpec<Args = any> = {
   name: string;
@@ -52,11 +52,11 @@ function lines(make: (width: number) => string[]): Component {
   return { render: make, invalidate() {} };
 }
 
-function tinted(ctx: RenderContext, theme: Theme, child: Component): Box {
+function tinted(ctx: RenderContext, theme: Theme, ...children: Component[]): Box {
   const role = ctx.isPartial ? "toolPendingBg" : ctx.isError ? "toolErrorBg" : "toolSuccessBg";
   // truncateToWidth ends cut text with a full reset, which would drop the tint for the rest of the line.
   const box = new Box(1, 0, text => theme.bg(role, text.replaceAll("\x1b[0m", `\x1b[0m${theme.getBgAnsi(role)}`)));
-  box.addChild(child);
+  for (const child of children) box.addChild(child);
   return box;
 }
 
@@ -76,12 +76,15 @@ export function row<Args>(spec: RowSpec<Args>) {
   return {
     renderShell: "self" as const,
     renderCall(args: Args, theme: Theme, ctx: RenderContext): Component {
+      ctx.state.hasBody = false; // renderResult runs next and sets this if it draws output.
       return tinted(ctx, theme, lines(width => {
         // renderResult fills the note later in the same update, before this draws.
         const done = !ctx.isPartial;
         const text = [ctx.state.note, done ? (ctx.expanded ? "▾" : "▸") : ""].filter(Boolean).join(" ");
         const note = theme.fg(ctx.isError ? "error" : "dim", text);
-        return headerLines(`${pill(spec.name, theme)} ${spec.call(args, theme)}`, note, width, ctx.expanded, theme);
+        const header = headerLines(`${pill(spec.name, theme)} ${spec.call(args, theme)}`, note, width, ctx.expanded, theme);
+        // One line of padding above and below the whole row; the body adds the bottom one when shown.
+        return ["", ...header, ...(ctx.state.hasBody ? [] : [""])];
       }));
     },
     renderResult(result: Result, { expanded }: { expanded: boolean }, theme: Theme, ctx: RenderContext): Component {
@@ -90,7 +93,8 @@ export function row<Args>(spec: RowSpec<Args>) {
       const body = ctx.isError
         ? theme.fg("error", getText(result).trim())
         : spec.body ? spec.body(result, theme, ctx.args as Args) : theme.fg("toolOutput", getText(result).trimEnd());
-      return tinted(ctx, theme, new Text(body, 0, 0));
+      ctx.state.hasBody = true;
+      return tinted(ctx, theme, new Text(body, 0, 0), new Spacer(1));
     },
   };
 }

@@ -1,8 +1,11 @@
 /**
  * Message background colours.
  *
- * Colours user messages, intermediate assistant/tool rows, and final assistant
- * responses without overriding tool renderers such as tool-pills.
+ * User messages and final responses get their own colours. Work in between
+ * (thinking, text alongside tool calls, and the gaps between tool rows) uses a
+ * lighter shade of the light theme's tool green (#e8f0e8), so tool rows stand
+ * out a little from the work around them.
+ * Tool renderers such as tool-pills keep drawing their own rows.
  * Leave loaders alone: Pi also uses them inside the editor's top border.
  */
 
@@ -22,11 +25,9 @@ type PaintMode = "user" | "work" | "assistant";
 const PATCHED = Symbol.for("pi-extension:colour-messages:patched-render");
 const ORIGINAL_RENDER = Symbol.for("pi-extension:colour-messages:original-render");
 
-const COLOURS: Record<PaintMode, string> = {
-	user: "#e7f0ff",
-	work: "#f3eafe",
-	assistant: "#e8f7ed",
-};
+const USER_COLOUR = "#f4eee2";
+const ASSISTANT_COLOUR = "#e7f0ff";
+const WORK_COLOUR = "#f1f7f1";
 
 const CSI_BG_RESET_RE = /\x1b\[49m/g;
 const CSI_FULL_RESET_RE = /\x1b\[0m/g;
@@ -48,8 +49,10 @@ function splitLeadingOsc(line: string): [string, string] {
 	return [line.slice(0, index), line.slice(index)];
 }
 
-export function paintLine(line: string, width: number, bgAnsi: string): string {
-	const [prefix, rest] = splitLeadingOsc(line);
+/** `swap` is a background Pi already painted that should become `bgAnsi`. */
+export function paintLine(line: string, width: number, bgAnsi: string, swap?: string): string {
+	const [prefix, raw] = splitLeadingOsc(line);
+	const rest = swap ? raw.replaceAll(swap, bgAnsi) : raw;
 	const padded = rest + " ".repeat(Math.max(0, width - visibleWidth(rest)));
 	const normalized = padded
 		.replace(CSI_BG_RESET_RE, bgAnsi)
@@ -57,14 +60,20 @@ export function paintLine(line: string, width: number, bgAnsi: string): string {
 	return `${prefix}${bgAnsi}${normalized}\x1b[49m`;
 }
 
-function paintLines(lines: string[], width: number, bgAnsi: string): string[] {
-	return lines.map((line) => paintLine(line, width, bgAnsi));
+function paintLines(lines: string[], width: number, bgAnsi: string, swap?: string): string[] {
+	return lines.map((line) => paintLine(line, width, bgAnsi, swap));
 }
 
 export function patchRender(
 	prototype: RenderablePrototype & Record<PropertyKey, unknown>,
 	modeForInstance: PaintMode | ((instance: any) => PaintMode),
 	colours: Record<PaintMode, string>,
+	{ swap, dropLeadingBlank = false, endWithBlank }: {
+		swap?: string;
+		dropLeadingBlank?: boolean;
+		/** Adds a blank line after instances whose last line has text. */
+		endWithBlank?: (instance: any) => boolean;
+	} = {},
 ): () => void {
   if (!prototype?.render) return () => {};
   const original = (prototype[ORIGINAL_RENDER] as typeof prototype.render | undefined) ?? prototype.render;
@@ -72,11 +81,13 @@ export function patchRender(
 	prototype[PATCHED] = true;
 
 	prototype.render = function colourMessagesRender(this: any, width: number): string[] {
-		const lines = original.call(this, width);
+		let lines = original.call(this, width);
 		if (!Array.isArray(lines) || lines.length === 0) return lines;
+		if (dropLeadingBlank && lines[0] === "") lines = lines.slice(1);
+		if (endWithBlank?.(this) && visibleWidth(lines[lines.length - 1].trim()) > 0) lines = [...lines, ""];
 
 		const mode = typeof modeForInstance === "function" ? modeForInstance(this) : modeForInstance;
-		return paintLines(lines, width, colours[mode]);
+		return paintLines(lines, width, colours[mode], swap);
 	};
   const patched = prototype.render;
   return () => {
@@ -150,14 +161,22 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     restore();
     if (ctx.mode !== "tui") return;
+    const theme = ctx.ui.theme;
     const colours = {
-      user: hexToBgAnsi(COLOURS.user), work: hexToBgAnsi(COLOURS.work), assistant: hexToBgAnsi(COLOURS.assistant),
+      user: hexToBgAnsi(USER_COLOUR), work: hexToBgAnsi(WORK_COLOUR), assistant: hexToBgAnsi(ASSISTANT_COLOUR),
     };
     const { UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent } = await import(resolvePiRuntimeModuleUrl());
     undo = [
-      patchRender(UserMessageComponent.prototype, "user", colours),
-      patchRender(ToolExecutionComponent.prototype, "work", colours),
-      patchRender(AssistantMessageComponent.prototype, (instance: { hasToolCalls?: boolean }) => instance.hasToolCalls ? "work" : "assistant", colours),
+      // Pi paints user messages with the theme's userMessageBg; swap it for ours.
+      patchRender(UserMessageComponent.prototype, "user", colours, { swap: theme.getBgAnsi("userMessageBg") }),
+      // Tool rows carry their own top/bottom padding (tool-pills), so drop Pi's blank line above each one.
+      // Pi still maps clicks as if that line were there, so only the top padding line ignores clicks.
+      patchRender(ToolExecutionComponent.prototype, "work", colours, { dropLeadingBlank: true }),
+      // Pi pads assistant text above but not below. Working text also sits directly above its
+      // tools, which no longer have a gap of their own.
+      patchRender(AssistantMessageComponent.prototype, (instance: { hasToolCalls?: boolean }) => instance.hasToolCalls ? "work" : "assistant", colours, {
+        endWithBlank: () => true,
+      }),
     ];
   });
 }

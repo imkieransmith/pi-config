@@ -17,7 +17,8 @@ function draw(result: any, { expanded = false, isError = false, isPartial = fals
 const output = { content: [{ type: "text", text: "pass 82\nfail 0\n M README.md\n" }] };
 
 test("collapsed rows are one line with a note on the right", () => {
-  const lines = draw(output);
+  const lines = draw(output).slice(1, -1);
+  assert.deepEqual([draw(output)[0], draw(output)[2]], ["", ""], "padding above and below");
   assert.equal(lines.length, 1);
   assert.equal(lines[0].length, 59); // 60 columns minus the right padding
   assert.match(lines[0], /^ +bash +cd \/Users\/kieran\/\.pi && npm test.*\.\.\. +3 lines ▸$/);
@@ -26,26 +27,27 @@ test("collapsed rows are one line with a note on the right", () => {
 test("cut rows keep their tint after the ellipsis", () => {
   const tintTheme = { ...theme, bg: (_: string, t: string) => `<bg>${t}</bg>`, getBgAnsi: () => "<bg>" };
   const ctx: any = { state: {}, expanded: false, isError: false, isPartial: false, args: { command } };
-  const [line] = bashRow.renderCall({ command }, tintTheme, ctx).render(60);
+  const [, line] = bashRow.renderCall({ command }, tintTheme, ctx).render(60);
   assert.ok(line.includes("\x1b[0m"));
   assert.ok(line.split("\x1b[0m").slice(1).every(part => part.startsWith("<bg>")));
 });
 
 test("expanded rows show the full command and output", () => {
-  const lines = draw(output, { expanded: true });
+  const lines = draw(output, { expanded: true }).slice(1, -1);
+  assert.equal(draw(output, { expanded: true }).filter(l => l === "").length, 2, "one padding line each end, none between");
   assert.match(lines[0], /3 lines ▾$/);
   assert.ok(lines.some(l => l.includes("git status --short")));
   assert.deepEqual(lines.slice(-3).map(l => l.trim()), ["pass 82", "fail 0", "M README.md"]);
 });
 
 test("failed rows stay collapsed and show the exit code", () => {
-  const lines = draw({ content: [{ type: "text", text: "boom\n\nCommand exited with code 2" }] }, { isError: true });
+  const lines = draw({ content: [{ type: "text", text: "boom\n\nCommand exited with code 2" }] }, { isError: true }).slice(1, -1);
   assert.equal(lines.length, 1);
   assert.match(lines[0], /exit 2 ▸$/);
 });
 
 test("running rows have no note or toggle marker", () => {
-  const lines = draw(undefined, { isPartial: true });
+  const lines = draw(undefined, { isPartial: true }).slice(1, -1);
   assert.equal(lines.length, 1);
   assert.doesNotMatch(lines[0], /[▸▾]/);
 });
