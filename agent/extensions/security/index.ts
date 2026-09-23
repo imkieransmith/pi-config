@@ -8,9 +8,9 @@
  *     Pi-internal tier system, read/discovery gating, and outside-project
  *     mutation. Plus security-flavoured confirms (package managers, network
  *     fetch, project scripts, executable-config mutation).
- *   - DATA-LOSS confirms (rm, git reset --hard, git clean, find -delete,
- *     truncate, etc.) are owned by confirm-destructive.ts, which is
- *     git-recoverability aware. They are deliberately NOT duplicated here to
+ *   - Git and GitHub write commands ask first via ./git.ts; reads run freely.
+ *   - DATA-LOSS confirms (rm, find -delete, truncate, etc.) are owned by
+ *     confirm-destructive.ts, which is git-recoverability aware. They are deliberately NOT duplicated here to
  *     avoid double prompts. Confirmations share a per-session allow-list via
  *     ../shared/confirm-gate.
  *
@@ -29,6 +29,7 @@ import {
   type SecurityDecision,
 } from "./policy.js";
 import { installSessionAllowReset, requestSessionConfirm } from "../shared/confirm-gate.js";
+import { classifyGit } from "./git.ts";
 
 type Decision = SecurityDecision;
 
@@ -332,6 +333,9 @@ export function classifyBash(command: string, cwd = process.cwd()): Decision {
     }
   }
 
+  const gitDecision = classifyGit(commandForRules);
+  if (gitDecision) return gitDecision;
+
   for (const rule of confirmBashRules) {
     if (rule.pattern.test(commandForRules)) {
       if (rule.reason === "in-place file rewrite" && shellRewriteTargetsOnlyTodo(commandForRules)) continue;
@@ -391,7 +395,8 @@ function formatSecurityStatus(): string {
     "protects:",
     "- blocks high-risk bash patterns such as privilege escalation, destructive disk commands, remote script execution, environment disclosure, and secret exfiltration patterns",
     "- confirms package manager, container, network fetch, in-place rewrite, and project script commands when an interactive UI is available (with an 'allow for this session' option)",
-    "- defers file/git data-loss prompts (rm, git reset --hard, git clean, find -delete, truncate) to the confirm-destructive extension to avoid double prompts",
+    "- allows read-only git and gh commands; asks before any git command that changes a repo, history or remote (commit, push, pull, reset, stash, checkout...), gh write commands, and npm/pnpm/yarn version. 'Allow for this session' applies per command kind",
+    "- defers file data-loss prompts (rm, find -delete, truncate) to the confirm-destructive extension to avoid double prompts",
     "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, cloud/CLI credential directories, credential dotfiles, private keys, and known credential filenames",
     "- allows ordinary reads and discovery anywhere without prompts; protected descendants are removed from built-in search results",
     "- allows built-in reads, discovery, and mutations anywhere under canonical /tmp without confirmation; symlink escapes are still classified by their real destination",

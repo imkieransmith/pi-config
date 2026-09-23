@@ -3,10 +3,12 @@
  *
  * Ownership boundary (see also security.ts):
  *   - This extension is the DATA-LOSS safety net: git-recoverability-aware
- *     confirms for actions that can destroy unrecoverable work (rm, git rm,
- *     git reset --hard, git clean, find -delete, truncate, dd to a file,
- *     prisma/db destructive SQL, file overwrites, large edit removals, and
- *     destructively-named custom tools). It also gates user-typed bash.
+ *     confirms for actions that can destroy unrecoverable work (rm, find
+ *     -delete, truncate, dd to a file, prisma/db destructive SQL, file
+ *     overwrites, large edit removals, and destructively-named custom tools).
+ *     It also gates user-typed bash.
+ *   - Git commands themselves are owned by security/git.ts: agents may only
+ *     read git state without asking.
  *   - HARD security blocks (disk/device destruction such as mkfs/fdisk/parted/
  *     wipefs, dd to /dev/, rsync --delete, shred, privilege escalation, etc.)
  *     are owned by security.ts. Those are intentionally NOT confirmed here, so a
@@ -67,18 +69,6 @@ const DESTRUCTIVE_COMMAND_PATTERNS: DestructiveCommandPattern[] = [
 			/(^|[;\n&|]\s*)find\b[^;&|]*(\s-delete\b|-exec\s+(sudo\s+)?rm\b)/,
 		reason: 'Deletes files found by find',
 		allow_key: 'bash:find-delete',
-	},
-	{
-		pattern:
-			/(^|[;\n&|]\s*)git\s+clean\b[^;&|]*-[a-zA-Z]*[fdx][a-zA-Z]*/,
-		reason: 'Deletes untracked files or directories',
-		allow_key: 'bash:git-clean',
-	},
-	{
-		pattern:
-			/(^|[;\n&|]\s*)git\s+(checkout|restore)\b[^;&|]*(\s--\s+\.\s*$|\s\.\s*$)/,
-		reason: 'Discards working tree changes',
-		allow_key: 'bash:git-discard-all',
 	},
 	{
 		pattern:
@@ -168,21 +158,12 @@ function parse_shell_words(command: string): string[] {
 	return words;
 }
 
-function extract_command_paths(
-	command: string,
-	command_name: 'rm' | 'git-rm',
-): string[] | undefined {
+function extract_rm_paths(command: string): string[] | undefined {
 	if (/[;\n&|`$()<>*?{}\[\]]/.test(command)) return undefined;
 	const words = parse_shell_words(command);
-	const command_index =
-		command_name === 'rm'
-			? words.findIndex((word) =>
-					['rm', 'rmdir', 'unlink'].includes(word),
-				)
-			: words.findIndex(
-					(word, index) =>
-						word === 'rm' && words[index - 1] === 'git',
-				);
+	const command_index = words.findIndex((word) =>
+		['rm', 'rmdir', 'unlink'].includes(word),
+	);
 	if (command_index === -1) return undefined;
 
 	return words
@@ -210,7 +191,7 @@ async function assess_rm_command(
 		return undefined;
 	}
 
-	const paths = extract_command_paths(command, 'rm');
+	const paths = extract_rm_paths(command);
 	if (paths && paths.length > 0) {
 		if (
 			paths.every((path) => {
@@ -238,92 +219,19 @@ async function assess_rm_command(
 	};
 }
 
-async function assess_git_rm_command(
-	command: string,
-	cwd: string,
-): Promise<DestructiveAction | undefined> {
-	if (!/(^|[;\n&|]\s*)git\s+rm\b/.test(command)) return undefined;
-	if (/\s-f\b|\s--force\b/.test(command)) {
-		return {
-			title: 'Confirm forced git removal?',
-			description: `Forced git removal can discard uncommitted file changes: ${preview(command)}`,
-			reason: 'Force-removes files from git',
-			allow_key: 'bash:git-rm-force',
-		};
-	}
-
-	const paths = extract_command_paths(command, 'git-rm');
-	if (
-		paths &&
-		paths.length > 0 &&
-		(await Promise.all(paths.map(path => is_git_recoverable(cwd, path)))).every(Boolean)
-	) {
-		return undefined;
-	}
-
-	const reason = paths?.length
-		? await describe_path_risk(cwd, paths)
-		: 'Deletes tracked files from git';
-	return {
-		title: 'Confirm git removal?',
-		description: `${reason}: ${preview(command)}`,
-		reason,
-		allow_key: 'bash:git-rm-risky',
-	};
-}
-
-async function assess_git_reset_hard(
-	command: string,
-	cwd: string,
-): Promise<DestructiveAction | undefined> {
-	if (!/(^|[;\n&|]\s*)git\s+reset\b[^;&|]*--hard\b/.test(command)) {
-		return undefined;
-	}
-
-	return {
-		title: 'Confirm hard reset?',
-		description: `This can discard uncommitted tracked changes: ${preview(command)}`,
-		reason: 'Discards uncommitted tracked changes',
-		allow_key: 'bash:git-reset-hard',
-	};
-}
-
 export async function assess_bash_command(
 	command: string,
 	cwd = process.cwd(),
 	session_created_paths: ReadonlySet<string> = new Set(),
 ): Promise<DestructiveAction | undefined> {
-	let normalized = command.trim();
-  // Resolve simple git global -C options before checking recoverability.
-  // Complex shells cannot safely inherit the original working directory.
-  if (/^git\s/.test(normalized) && !/[;\n&|`$()<>]/.test(normalized)) {
-    const words = parse_shell_words(normalized);
-    let index = 1;
-    let uncertain = false;
-    while (words[index]?.startsWith('-')) {
-      const option = words[index++];
-      if (option === '-C' && words[index]) cwd = resolve(cwd, words[index++]);
-      else if (option.startsWith('-C') && option.length > 2) cwd = resolve(cwd, option.slice(2));
-      else if (['--no-pager', '--no-optional-locks', '--literal-pathspecs'].includes(option)) continue;
-      else { uncertain = true; break; }
-    }
-    if (uncertain && /\b(?:rm|reset|restore|checkout|clean)\b/.test(normalized)) {
-      return { title: 'Confirm git command?', description: preview(command), reason: 'Git target or options require review', allow_key: 'bash:git-uncertain' };
-    }
-    if (!uncertain) normalized = 'git ' + words.slice(index).map(word => /\s/.test(word) ? JSON.stringify(word) : word).join(' ');
-  }
-  if (/[;\n&|`$()<>]/.test(normalized) && /\b(?:rm|rmdir|unlink|reset|restore|checkout|clean|truncate)\b/.test(normalized)) {
-    return { title: 'Confirm destructive shell?', description: preview(command), reason: 'Compound or dynamic shell may discard files', allow_key: 'bash:destructive-shell' };
-  }
-  if (/^git\s+restore\b/.test(normalized) || (/^git\s+checkout\b/.test(normalized) && !/^git\s+checkout\s+-b\s+[^\s]+$/.test(normalized))) {
-    return { title: 'Confirm git restore?', description: preview(command), reason: 'May discard working tree or staged changes', allow_key: 'bash:git-restore' };
-  }
+	const normalized = command.trim();
 	if (!normalized) return undefined;
+	// Git commands (including `git rm`) belong to security/git.ts.
+	if (/[;\n&|`$()<>]/.test(normalized) && /(?<!\bgit\s+)\b(?:rm|rmdir|unlink|truncate)\b/.test(normalized)) {
+		return { title: 'Confirm destructive shell?', description: preview(command), reason: 'Compound or dynamic shell may discard files', allow_key: 'bash:destructive-shell' };
+	}
 
-	const specific =
-		(await assess_rm_command(normalized, cwd, session_created_paths)) ??
-		(await assess_git_rm_command(normalized, cwd)) ??
-		(await assess_git_reset_hard(normalized, cwd));
+	const specific = await assess_rm_command(normalized, cwd, session_created_paths);
 	if (specific) return specific;
 
 	const match = DESTRUCTIVE_COMMAND_PATTERNS.find(({ pattern }) =>

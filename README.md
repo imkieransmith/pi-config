@@ -25,7 +25,7 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Resource Overview** (`resource-overview.ts`) — Startup overview of actual available commands, skills and active tools.
 - **Response Metrics** (`response-metrics.ts`) — Persistent TUI-only elapsed time, tool count, input/output tokens and estimated main-model output tokens/sec. The rate includes request latency but excludes tools, user waits and advisor calls; it uses reported output tokens, not just visible text.
 - **RTK Rewrite** (`rtk.ts`) — Best-effort shell command optimization via `rtk rewrite`.
-- **Security Guard** (`security/`) — Confirms or blocks risky commands and sensitive file access.
+- **Security Guard** (`security/`) — Confirms or blocks risky commands and sensitive file access. Agents may read git/GitHub state freely but must ask before any command that changes it (commit, push, pull, reset, stash, `gh pr create`, `npm version`...).
 - **Standalone Working** (`standalone-working.ts`) - Keeps the working status on its own row above the input, using Pi's native editor without an embedded border indicator.
 - **Superset Hooks** (`superset-hooks.ts`) — Emit Superset lifecycle hooks so the host shows a working indicator.
 - **Tool Pills** (`tool-pills`) — Compact tool rendering, native edit diffs and bounded write previews.
