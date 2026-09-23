@@ -93,6 +93,9 @@ test("advisor retries returned WebSocket errors with fresh auth and summed repor
   const result = await pending;
   assert.equal(f.calls.length, 2);
   assert.deepEqual(f.calls[0].payload, f.calls[1].payload);
+  const first = f.calls[0].payload.messages[0];
+  assert.equal(first.role, "system");
+  assert.ok(JSON.stringify(first).includes("You advise a coding agent"), "advisor system prompt reaches the provider");
   assert.equal(f.calls[1].selected, f.params.model);
   assert.equal(f.calls[1].options.reasoning, "high");
   assert.equal(f.calls[1].options.headers["x-attempt"], "2");

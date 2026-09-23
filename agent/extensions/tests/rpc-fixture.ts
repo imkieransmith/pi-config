@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, type AssistantMessage, type JsonObject } from "@earendil-works/pi-ai";
 import { requestSessionConfirm } from "../shared/confirm-gate.ts";
 import { appendFileSync } from "node:fs";
 
@@ -39,7 +39,7 @@ export default function (pi: ExtensionAPI) {
       const prompt = last?.role === "user" && typeof last.content === "string" ? last.content : last?.role === "user" && Array.isArray(last.content) ? last.content.filter(p => p.type === "text").map(p => p.type === "text" ? p.text : "").join("\n") : "";
       if (process.env.PI_HARNESS_REQUESTS) appendFileSync(process.env.PI_HARNESS_REQUESTS, JSON.stringify({ prompt, lastTool: last?.role === "toolResult" ? { name: last.toolName, content: last.content } : undefined }) + "\n");
       const tail = Array.from({ length: 20 }, (_, index) => `line ${index}: Unicode 界 🙂`).join("\n");
-      const calls: Record<string, { name: string; arguments: Record<string, unknown> }> = {
+      const calls: Record<string, { name: string; arguments: JsonObject }> = {
         "advisor fixture": { name: "advisor", arguments: { brief: "Check synthetic transport recovery without a real model" } },
         "question fixture": { name: "ask_user_question", arguments: { questions: [{ header: "A normal heading longer than twelve characters", question: "Select the synthetic test answer", options: [{ label: "Yes" }, { label: "No" }], multiSelect: false }] } },
         "write fixture": { name: "write", arguments: { path: process.env.PI_HARNESS_WRITE!, content: `first\n${tail}\n` } },

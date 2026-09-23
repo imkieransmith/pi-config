@@ -11,7 +11,7 @@
 
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { isContextOverflow, retryAssistantCall, type Api, type AssistantMessage, type ImageContent, type Message, type Model, type StopReason, type TextContent, type ThinkingLevel, type Usage } from "@earendil-works/pi-ai";
+import { isContextOverflow, normalizeContext, retryAssistantCall, type Api, type AssistantMessage, type ImageContent, type Message, type Model, type StopReason, type TextContent, type ThinkingLevel, type Usage } from "@earendil-works/pi-ai";
 import {
 	convertToLlm,
 	getAgentDir,
@@ -548,7 +548,8 @@ export async function runAdvisor(
 			try {
 				result = await provider.streamSimple(
 					params.model,
-					{ systemPrompt: ADVISOR_SYSTEM_PROMPT, messages: payload.messages, tools: [] },
+					// Providers read the prompt only from the leading system message.
+					normalizeContext({ systemPrompt: ADVISOR_SYSTEM_PROMPT, messages: payload.messages, tools: [] }),
 					{ apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: params.signal, reasoning: params.effort },
 				).result();
 				usage = sumUsage(usage, result.usage);

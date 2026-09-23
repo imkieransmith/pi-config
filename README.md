@@ -18,6 +18,7 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Context Snapshot** (`context/`) — Append-only durable work captures with a bounded, freshly replaced recent-summary appendix after Pi compacts.
 - **Custom Footer** (`custom-footer`) — One line with path, context and model info. Advisor status stays hidden unless unavailable; warnings appear inline.
 - **Evidence Store** (`evidence.ts`) — Validated durable snippets with deduplication, paginated discovery, exact final-citation verification, and TUI-only proof.
+- **Herdr Agent State** (`herdr-agent-state.ts`) — Reports agent state to the herdr host. Installed and overwritten by herdr; don't edit it by hand.
 - **Meep** (`meep.ts`) — Says meep when the model is done working.
 - **Plan Command** (`plan.ts`) — `/plan <request>` expands the write-plan skill. The skill handles captures; the command never force-closes them.
 - **Redact Sensitive Data** (`redact.ts`) — Redact secrets from tool output.
