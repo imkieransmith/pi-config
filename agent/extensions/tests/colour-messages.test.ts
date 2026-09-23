@@ -9,8 +9,10 @@ import colourMessages from "../colour-messages/index.ts";
 // Use the same bundled classes as the CLI, not unbundled lookalikes.
 test("message colours leave the native shared loader unchanged across startup and reload", async t => {
   const cli = join(getPackageDir(), "dist/bundle/cli.js");
-  const chunk = readFileSync(cli, "utf8").match(/import\{[^}]*\bmain\b[^}]*\}from"([^"]+)"/)![1];
-  const runtime = await import(new URL(chunk, pathToFileURL(cli)).href);
+  const cliRuntime = join(getPackageDir(), "dist/bundle/cli-runtime.js");
+  assert.ok(readFileSync(cli, "utf8").includes('createRequire(import.meta.url)("./cli-runtime.js")'));
+  const chunk = readFileSync(cliRuntime, "utf8").match(/import\{[^}]*\bmain\b[^}]*\}from"([^"]+)"/)![1];
+  const runtime = await import(new URL(chunk, pathToFileURL(cliRuntime)).href);
   const probe = new runtime.BorderedLoader({ requestRender() {} }, { fg: (_: string, text: string) => text }, "Working", { cancellable: false });
   probe.loader.stop();
   const loaderPrototype = Object.getPrototypeOf(probe.loader);

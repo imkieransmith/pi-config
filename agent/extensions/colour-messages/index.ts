@@ -7,7 +7,7 @@
  */
 
 import { readFileSync, realpathSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -91,11 +91,11 @@ export function patchRender(
 // MONKEY-PATCH (pi internals): this extension overrides the `render()` method on
 // pi's private message components. The CLI bundles those classes into a
 // hashed chunk, so importing the unbundled files under `dist/modes` would patch
-// different class objects and have no effect. This extension reads the running
-// CLI's main-chunk import, then imports that same module instance.
+// different class objects and have no effect. The CLI entrypoint now loads
+// cli-runtime.js, which imports the main chunk. Import that same module instance.
 //
 // Fragility / maintenance — this WILL break if pi changes any of:
-//   - the `dist/bundle/cli.js` entrypoint shape,
+//   - the `dist/bundle/cli.js` / `cli-runtime.js` entrypoint shape,
 //   - the main chunk's exported class names (UserMessageComponent,
 //     AssistantMessageComponent, ToolExecutionComponent),
 //   - those classes' `render(width)` methods,
@@ -129,12 +129,18 @@ function resolvePiRuntimeModuleUrl(): string {
 	}
 
 	const cliSource = readFileSync(cliPath, "utf8");
-	const mainChunkImport = cliSource.match(/import\{[^}]*\bmain\b[^}]*\}from"([^"]+)"/);
-	if (!mainChunkImport?.[1]) {
-		throw new Error(`Could not locate pi's main bundle chunk import in: ${cliPath}`);
+	if (!cliSource.includes('createRequire(import.meta.url)("./cli-runtime.js")')) {
+		throw new Error(`Could not locate pi's CLI runtime loader in: ${cliPath}`);
 	}
 
-	return new URL(mainChunkImport[1], pathToFileURL(cliPath)).href;
+	const runtimePath = join(bundleDir, "cli-runtime.js");
+	const runtimeSource = readFileSync(runtimePath, "utf8");
+	const mainChunkImport = runtimeSource.match(/import\{[^}]*\bmain\b[^}]*\}from"([^"]+)"/);
+	if (!mainChunkImport?.[1]) {
+		throw new Error(`Could not locate pi's main bundle chunk import in: ${runtimePath}`);
+	}
+
+	return new URL(mainChunkImport[1], pathToFileURL(runtimePath)).href;
 }
 
 export default function (pi: ExtensionAPI) {
