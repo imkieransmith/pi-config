@@ -3,7 +3,7 @@ name: evidence-add
 title: Add Evidence
 description: >
   Store evidence for retrieved or recalled factual claims about external reality
-  before stating them. Triggers — snippets from web-search/visit-webpage,
+  before stating them. Triggers — snippets from web search or fetched pages,
   statements about real entities you did not observe in this session (people's
   roles, company facts, dates, prices, versions, statistics, current status),
   quotes or paraphrases of others' words, and recalled facts from documentation.
@@ -20,7 +20,7 @@ description: >
 
 Evidence is required when the claim originates from outside the current session — retrieved from web search, a fetched page, a local file you read, or recalled from training. Specifically:
 
-- Any snippet returned by `web-search` or `visit-webpage`.
+- Any snippet returned by the `web` skill (search or fetch).
 - A name, date, number, version, price, or current status of a real entity.
 - A claim starting with "according to", "as of", "currently", "recently".
 - A quote or paraphrase of someone else's words.
