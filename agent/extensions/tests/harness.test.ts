@@ -14,10 +14,9 @@ import customFooter from "../custom-footer/custom-footer.ts";
 import questions from "../ask-user-question/index.ts";
 import { AskUserQuestionComponent } from "../ask-user-question/component.ts";
 import { QuestionSchema } from "../ask-user-question/schema.ts";
-import { classifyBash } from "../security/index.ts";
 import { classifyResolvedPath } from "../security/policy.ts";
 import { protectDiscovery } from "../security/search.ts";
-import { assess_bash_command, assess_tool_call } from "../confirm-destructive.ts";
+import { assess_tool_call } from "../confirm-destructive.ts";
 import { installSessionAllowReset, requestSessionConfirm } from "../shared/confirm-gate.ts";
 import { redact_text, redact_value } from "../redact.ts";
 import { registerDiffTools } from "../tool-pills/diff-renderer.ts";
@@ -103,49 +102,6 @@ test("ordinary source paths are not credential guesses", async () => {
   }
 });
 
-test("negative find patterns and ordinary filenames don't trigger secret reads", () => {
-  for (const cmd of ['find agent/extensions -not -path "*/.git/*"', 'rg test -g "!**/.env"', 'readlink PersonalAccessToken.php', 'head design-tokens.css']) {
-    assert.equal(classifyBash(cmd, "/projects/app").action, "allow", cmd);
-  }
-  assert.equal(classifyBash("head ~/.ssh/config", "/projects/app").action, "block");
-  assert.equal(classifyBash("head credentials.json", "/projects/app").action, "block");
-  assert.equal(classifyBash("rg token src", "/projects/app").action, "allow");
-});
-
-test("destructive commands are checked without executing them", async () => {
-  for (const cmd of ["printf ok\nrm missing.txt", "cd /elsewhere; rm x", "rm *.txt"]) {
-    assert.ok(await assess_bash_command(cmd, "/nonexistent"), cmd);
-  }
-  // Git belongs to security/git.ts, so it never prompts twice.
-  for (const cmd of ["git status --short", "git reset --hard", "cd x && git rm y", "printf hello"]) assert.equal(await assess_bash_command(cmd, "/nonexistent"), undefined, cmd);
-});
-
-test("agents read git freely but ask before changing it", () => {
-  const reads = [
-    "git status --short", "git -C /example diff --stat", "git log --oneline -5", "git show HEAD:src/a.ts", "git --no-pager blame x",
-    "git branch", "git branch -a", "git branch --contains abc", "git tag -l 'v*'", "git remote -v", "git stash list",
-    "git config --get user.name", "git config user.name", "git worktree list", "git log --grep 'fix: thing'",
-    "cd repo && git diff | head", "GIT_PAGER=cat git log", "rtk git status", "gh pr view 12", "gh pr list", "gh run view 5 --log",
-    "gh api repos/o/r/pulls", "grep -rn git src", "rg 'git push' docs",
-  ];
-  for (const cmd of reads) assert.equal(classifyBash(cmd, "/projects/app").action, "allow", cmd);
-  const writes: Array<[string, string]> = [
-    ["git commit -m x", "git:git commit"], ["git push", "git:git push"], ["git pull", "git:git pull"], ["git fetch", "git:git fetch"],
-    ["git reset HEAD~1", "git:git reset"], ["git stash", "git:git stash"], ["git checkout main", "git:git checkout"],
-    ["git branch -D x", "git:git branch"], ["git branch new-thing", "git:git branch"], ["git tag v1", "git:git tag"],
-    ["git config user.name Me", "git:git config"], ["git -C /elsewhere rm x", "git:git rm"], ["git -c alias.x=!rm log", "git:git with config override"],
-    ["git add . && git commit -m x", "git:git add+git commit"], ["cd a; git merge b", "git:git merge"], ["echo $(git rebase main)", "git:git rebase"],
-    ["find . -name '*.ts' -exec git add {} ;", "git:git add"], ["ls | xargs -n1 git rm", "git:git rm"], ["git frobnicate", "git:git frobnicate"],
-    ["gh pr create --fill", "git:gh pr create"], ["gh pr merge 3", "git:gh pr merge"], ["gh api -X POST repos/o/r/issues", "git:gh api"],
-    ["gh api repos/o/r/issues -f title=x", "git:gh api"], ["npm version patch", "git:npm version"], ["pnpm version minor", "git:pnpm version"],
-  ];
-  for (const [cmd, key] of writes) {
-    const decision = classifyBash(cmd, "/projects/app");
-    assert.equal(decision.action, "confirm", cmd);
-    assert.equal(decision.allowKey, key, cmd);
-  }
-});
-
 test("large edits trust dirty tracked files in their own repo but not untracked paths or symlink targets", async t => {
   const root = await mkdtemp(join(tmpdir(), "pi-tracked-edits-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -180,7 +136,6 @@ test("large edits trust dirty tracked files in their own repo but not untracked 
   assert.equal((await edit(outside))?.allow_key, "edit:large-removal-risky");
   // This edit-only exemption must not relax overwrites or deletes.
   assert.equal((await assess_tool_call({ type: "tool_call", toolName: "write", toolCallId: "test-write", input: { path: tracked, content: "" } }, repo))?.allow_key, "write:risky-overwrite");
-  assert.equal((await assess_bash_command('rm "src/tracked[1].txt"', repo))?.allow_key, "bash:rm-risky");
 });
 
 test("/plan expands the skill and does not force-close a capture", async () => {

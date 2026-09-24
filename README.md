@@ -9,7 +9,7 @@ Some extensions began as other people's work; I link to their sources in the cod
 - **Advisor** (`advisor`): Get advice from the model set in `agent/settings.json`.
 - **Ask User Question** (`ask-user-question`): Asks multiple-choice or free-text questions in the terminal.
 - **Colour Messages** (`colour-messages`): Gives your messages, work, and final replies different backgrounds.
-- **Confirm Destructive** (`confirm-destructive.ts`): Asks before risky overwrites, deletes, and shell commands. Skips size-based prompts for edits to tracked files.
+- **Confirm Destructive** (`confirm-destructive.ts`): Asks before Pi's write tool overwrites work git can't restore, or an edit removes a lot from an untracked file. Skips size-based prompts for edits to tracked files.
 - **Context Snapshot** (`context/`): Saves comprehensive work notes, added to context after compaction.
 - **Custom Footer** (`custom-footer`): Compact footer showing the path, context use, and model.
 - **Evidence Store** (`evidence.ts`): Saves source snippets, finds repeats, and checks citations before final answers.
@@ -20,7 +20,8 @@ Some extensions began as other people's work; I link to their sources in the cod
 - **Redact Sensitive Data** (`redact.ts`): Masks known secrets in tool output.
 - **Response Metrics** (`response-metrics.ts`): Shows time, tool calls, tokens, and the main model's output rate.
 - **RTK Rewrite** (`rtk.ts`): Uses `rtk rewrite` to shorten some shell output.
-- **Security Guard** (`security/`): Checks risky commands and private files. Agents may read git and GitHub, but must ask before any write to them.
+- **Sandbox** (`shared/sandbox.ts`, used by `rtk.ts`): Runs the agent's bash commands in an OS sandbox through [sandbox-runtime](https://github.com/anthropics/sandbox-runtime). Home stays hidden except the project and tool folders, writes stay in the project and `/tmp`, and network access is limited to a short list of domains and localhost. The project's `.git` and `.env` are read-only, so agents can read history but not commit, reset, stash or push. Your own `!` commands run as normal. Linux needs `bubblewrap`, `socat`, and `ripgrep`.
+- **Security Guard** (`security/`): Keeps Pi's own file tools (read, write, edit, grep, find, ls) away from secrets and private files. Bash is left to the sandbox.
 - **Standalone Working** (`standalone-working.ts`): Shows working status above the input, not inside it.
 - **Tool Pills** (`tool-pills`): Shows tool calls on one line; click to expand details/images. Optional: bash rows swap the command for a plain-English sentence if you set a `explain.model` in settings.
 - **Web** (`web.ts`): Adds `web_search` and `web_fetch` through Jina. Search needs `JINA_API_KEY` in the environment or `~/.pi/.env`; fetch does not. Long pages go to `/tmp`.

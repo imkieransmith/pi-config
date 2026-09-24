@@ -1,20 +1,11 @@
 /**
- * Confirm destructive tool calls before they run.
+ * Confirm Pi tool calls that could destroy work git can't restore.
  *
- * Ownership boundary (see also security.ts):
- *   - This extension is the DATA-LOSS safety net: git-recoverability-aware
- *     confirms for actions that can destroy unrecoverable work (rm, find
- *     -delete, truncate, dd to a file, prisma/db destructive SQL, file
- *     overwrites, large edit removals, and destructively-named custom tools).
- *     It also gates user-typed bash.
- *   - Git commands themselves are owned by security/git.ts: agents may only
- *     read git state without asking.
- *   - HARD security blocks (disk/device destruction such as mkfs/fdisk/parted/
- *     wipefs, dd to /dev/, rsync --delete, shred, privilege escalation, etc.)
- *     are owned by security.ts. Those are intentionally NOT confirmed here, so a
- *     command is never gated by both extensions.
+ *   - Covers write overwrites, large edit removals, and destructively-named
+ *     custom tools. Bash is not checked: the sandbox (./shared/sandbox.ts)
+ *     keeps it inside the project with `.git` read-only.
  *   - Edits to tracked files skip size-based prompts, even with uncommitted
- *     changes. Full overwrites and deletions keep their stricter checks.
+ *     changes. Full overwrites keep their stricter checks.
  *   - Confirmations share a per-session allow-list via ./shared/confirm-gate.
  *
  * Original - https://github.com/spences10/my-pi/tree/main/packages/pi-confirm-destructive
@@ -26,14 +17,12 @@ import type {
 	ToolCallEvent,
 	ToolCallEventResult,
 	ToolResultEvent,
-	UserBashEvent,
-	UserBashEventResult,
 } from '@earendil-works/pi-coding-agent';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 import { existsSync } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { resolveSecurityPath } from './security/policy.ts';
 import { installSessionAllowReset, requestSessionConfirm } from './shared/confirm-gate.js';
 
@@ -43,47 +32,6 @@ export interface DestructiveAction {
 	reason: string;
 	allow_key: string;
 }
-
-interface DestructiveCommandPattern {
-	pattern: RegExp;
-	reason: string;
-	allow_key: string;
-}
-
-const DESTRUCTIVE_COMMAND_PATTERNS: DestructiveCommandPattern[] = [
-	{
-		pattern:
-			/(^|[;\n&|]\s*)(npx\s+|pnpx\s+|pnpm\s+exec\s+|bunx\s+)?prisma\s+(migrate\s+reset|db\s+push\b[^;&|]*--force-reset|db\s+execute\b)/,
-		reason:
-			'Runs a potentially destructive Prisma database operation',
-		allow_key: 'bash:prisma-destructive',
-	},
-	{
-		pattern:
-			/(^|[;\n&|]\s*)(psql|mysql|mariadb|sqlite3)\b[^;&|]*\b(drop|delete\s+from|truncate|alter\s+table|update\s+\S+\s+set)\b/i,
-		reason: 'Runs destructive SQL through a database CLI',
-		allow_key: 'bash:db-cli-destructive-sql',
-	},
-	{
-		pattern:
-			/(^|[;\n&|]\s*)find\b[^;&|]*(\s-delete\b|-exec\s+(sudo\s+)?rm\b)/,
-		reason: 'Deletes files found by find',
-		allow_key: 'bash:find-delete',
-	},
-	{
-		pattern:
-			/(^|[;\n&|]\s*)truncate\b[^;&|]*(\s-s\s*0\b|\s--size\s*=?\s*0\b)/,
-		reason: 'Empties file contents',
-		allow_key: 'bash:truncate-zero',
-	},
-	{
-		// dd to a regular file. dd to a device (of=/dev/...) is hard-blocked by
-		// security.ts, so it is deliberately excluded here.
-		pattern: /(^|[;\n&|]\s*)dd\b[^;&|]*\bof=(?!\/dev\/)/,
-		reason: 'Overwrites a file with dd',
-		allow_key: 'bash:dd-output',
-	},
-];
 
 const DESTRUCTIVE_CUSTOM_TOOL_NAME =
 	/(^|[_-])(delete|destroy|drop|remove|archive|execute_write_query|execute_schema_query|bulk_insert)([_-]|$)/i;
@@ -146,105 +94,6 @@ async function is_git_tracked(absolute: string): Promise<boolean> {
 
 function is_todo_planning_note(path: string): boolean {
 	return basename(path).toLowerCase() === 'todo.md';
-}
-
-function parse_shell_words(command: string): string[] {
-	const words: string[] = [];
-	const pattern = /"((?:\\.|[^"])*)"|'([^']*)'|(\S+)/g;
-	let match: RegExpExecArray | null;
-	while ((match = pattern.exec(command))) {
-		words.push(match[1] ?? match[2] ?? match[3]);
-	}
-	return words;
-}
-
-function extract_rm_paths(command: string): string[] | undefined {
-	if (/[;\n&|`$()<>*?{}\[\]]/.test(command)) return undefined;
-	const words = parse_shell_words(command);
-	const command_index = words.findIndex((word) =>
-		['rm', 'rmdir', 'unlink'].includes(word),
-	);
-	if (command_index === -1) return undefined;
-
-	return words
-		.slice(command_index + 1)
-		.filter((word) => word !== '--' && !word.startsWith('-'));
-}
-
-async function describe_path_risk(cwd: string, paths: string[]): Promise<string> {
-  const risks = new Set(await Promise.all(paths.map(path => get_git_recoverability(cwd, path))));
-  if (risks.has('untracked')) return 'Deletes untracked files that git cannot restore';
-  if (risks.has('tracked-dirty')) return 'Deletes files with uncommitted changes';
-  return 'Deletes files outside git recovery';
-}
-
-async function assess_rm_command(
-	command: string,
-	cwd: string,
-	session_created_paths: ReadonlySet<string> = new Set(),
-): Promise<DestructiveAction | undefined> {
-	// shred is hard-blocked by security.ts (disk destruction), so it is omitted
-	// here to keep each command owned by exactly one gate.
-	if (
-		!/(^|[;\n&|]\s*)(sudo\s+)?(rm|rmdir|unlink)\b/.test(command)
-	) {
-		return undefined;
-	}
-
-	const paths = extract_rm_paths(command);
-	if (paths && paths.length > 0) {
-		if (
-			paths.every((path) => {
-				const absolute = resolve(cwd, path);
-				return (
-					session_created_paths.has(absolute)
-				);
-			})
-		) {
-			return undefined;
-		}
-		if ((await Promise.all(paths.map(path => is_git_recoverable(cwd, path)))).every(Boolean)) {
-			return undefined;
-		}
-	}
-
-	const reason = paths?.length
-		? await describe_path_risk(cwd, paths)
-		: 'Deletes files or directories';
-	return {
-		title: 'Confirm destructive command?',
-		description: `${reason}: ${preview(command)}`,
-		reason,
-		allow_key: 'bash:rm-risky',
-	};
-}
-
-export async function assess_bash_command(
-	command: string,
-	cwd = process.cwd(),
-	session_created_paths: ReadonlySet<string> = new Set(),
-): Promise<DestructiveAction | undefined> {
-	const normalized = command.trim();
-	if (!normalized) return undefined;
-	// Git commands (including `git rm`) belong to security/git.ts.
-	if (/[;\n&|`$()<>]/.test(normalized) && /(?<!\bgit\s+)\b(?:rm|rmdir|unlink|truncate)\b/.test(normalized)) {
-		return { title: 'Confirm destructive shell?', description: preview(command), reason: 'Compound or dynamic shell may discard files', allow_key: 'bash:destructive-shell' };
-	}
-
-	const specific = await assess_rm_command(normalized, cwd, session_created_paths);
-	if (specific) return specific;
-
-	const match = DESTRUCTIVE_COMMAND_PATTERNS.find(({ pattern }) =>
-		pattern.test(normalized),
-	);
-	if (!match) return undefined;
-
-	return {
-		title: 'Confirm destructive command?',
-		description: `${match.reason}: ${preview(normalized)}`,
-		reason: match.reason,
-		allow_key: match.allow_key,
-	};
 }
 
 async function assess_file_write(
@@ -337,12 +186,6 @@ export async function assess_tool_call(
 	cwd: string,
 	session_created_paths: ReadonlySet<string> = new Set(),
 ): Promise<DestructiveAction | undefined> {
-	if (event.toolName === 'bash') {
-		const command = (event.input as { command?: unknown }).command;
-		return typeof command === 'string'
-			? assess_bash_command(command, cwd, session_created_paths)
-			: undefined;
-	}
 	if (event.toolName === 'write') {
 		return assess_file_write(
 			cwd,
@@ -358,15 +201,6 @@ export async function assess_tool_call(
 
 function blocked_reason(action: DestructiveAction): string {
 	return `Blocked destructive action: ${action.reason}`;
-}
-
-function blocked_bash_result(action: DestructiveAction) {
-	return {
-		output: `${blocked_reason(action)}\n`,
-		exitCode: 130,
-		cancelled: false,
-		truncated: false,
-	};
 }
 
 export default async function confirm_destructive(pi: ExtensionAPI) {
@@ -431,25 +265,6 @@ export default async function confirm_destructive(pi: ExtensionAPI) {
 			if (event.toolName === 'write' && !event.isError) {
 				session_created_files.add(absolute);
 			}
-		},
-	);
-
-	pi.on(
-		'user_bash',
-		async (
-			event: UserBashEvent,
-			ctx,
-		): Promise<UserBashEventResult | void> => {
-			const action = await assess_bash_command(
-				event.command,
-				event.cwd,
-				session_created_files,
-			);
-			if (!action) return;
-
-			if (await should_allow(action, ctx)) return;
-
-			return { result: blocked_bash_result(action) };
 		},
 	);
 }

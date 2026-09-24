@@ -21,7 +21,7 @@ function block(reason: string, detail?: string): SecurityDecision {
 }
 
 /** Treat common user-facing path syntax as real filesystem paths. */
-export function expandUserPath(filePath: string): string {
+function expandUserPath(filePath: string): string {
   if (filePath === "~") return os.homedir();
   if (filePath.startsWith("~/")) return path.join(os.homedir(), filePath.slice(2));
   return filePath;
@@ -62,7 +62,7 @@ export async function resolveSecurityPath(rawPath: string, cwd: string): Promise
 }
 
 /** Root-aware containment check; prefix checks are unsafe for sibling paths. */
-export function isInside(parent: string, child: string): boolean {
+function isInside(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
 }
@@ -76,7 +76,7 @@ function isEnvFile(name: string): boolean {
 }
 
 /** Names alone often reveal secret intent even before a file exists. */
-export function includesSensitiveSegment(absPath: string): string | undefined {
+function includesSensitiveSegment(absPath: string): string | undefined {
   const segments = pathSegments(absPath);
   const base = path.basename(absPath);
 
@@ -146,14 +146,14 @@ function isPiPublicDirectory(absPath: string, home: string): boolean {
   return dirs.some((dir) => absPath === dir);
 }
 
-export function isPiAuthoringPath(absPath: string, home: string): boolean {
+function isPiAuthoringPath(absPath: string, home: string): boolean {
   return (
     isInside(path.join(home, ".pi", "agent", "skills"), absPath) ||
     isInside(path.join(home, ".pi", "agent", "extensions"), absPath)
   );
 }
 
-export function isPiPrivateRuntimePath(absPath: string, home: string): boolean {
+function isPiPrivateRuntimePath(absPath: string, home: string): boolean {
   return [
     path.join(home, ".pi", "agent", "sessions"),
     path.join(home, ".pi", "agent", "history"),
@@ -166,30 +166,30 @@ export function isPiPrivateRuntimePath(absPath: string, home: string): boolean {
   ].some((dir) => isInside(dir, absPath));
 }
 
-export function isPiPrivateConfigPath(absPath: string, home: string): boolean {
+function isPiPrivateConfigPath(absPath: string, home: string): boolean {
   if (!isInside(path.join(home, ".pi"), absPath)) return false;
   if (isPiAuthoringPath(absPath, home) || isPiRootPublicFile(absPath, home)) return false;
   return /^(?:config|settings|models?|providers?|auth|credentials?)(?:\.|$)/i.test(path.basename(absPath));
 }
 
-export function isPiGeneratedModelStatePath(absPath: string, home: string): boolean {
+function isPiGeneratedModelStatePath(absPath: string, home: string): boolean {
   return absPath === path.join(home, ".pi", "agent", "models-store.json");
 }
 
-export function isActivePiWorkspacePath(absPath: string, cwd: string, home: string): boolean {
+function isActivePiWorkspacePath(absPath: string, cwd: string, home: string): boolean {
   const piRoot = path.join(home, ".pi");
   return isInside(piRoot, cwd) && isInside(piRoot, absPath);
 }
 
-export function isPiSettingsPath(absPath: string, home: string): boolean {
+function isPiSettingsPath(absPath: string, home: string): boolean {
   return absPath === path.join(home, ".pi", "agent", "settings.json");
 }
 
-export function isPiModelsPath(absPath: string, home: string): boolean {
+function isPiModelsPath(absPath: string, home: string): boolean {
   return absPath === path.join(home, ".pi", "agent", "models.json");
 }
 
-export function classifyPiPath(absPath: string, home: string): PiPathTier {
+function classifyPiPath(absPath: string, home: string): PiPathTier {
   const piRoot = path.join(home, ".pi");
   if (!isInside(piRoot, absPath)) return "outside";
   if (isPiPrivateRuntimePath(absPath, home)) return "private";

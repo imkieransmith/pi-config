@@ -7,9 +7,8 @@
  * other. Fail-closed in non-UI modes (print/JSON/subagent).
  *
  * Consumers:
- *   - security.ts            — security boundary (hard blocks + confirms)
- *   - confirm-destructive.ts — git-aware data-loss safety net
- * See those files for the command-ownership split that prevents double prompts.
+ *   - security/index.ts      — path checks for Pi's own file tools
+ *   - confirm-destructive.ts — git-aware overwrite and large-edit checks
  *
  * A shared weak map scopes grants to the session manager and session ID.
  * Each extension load installs its own lifecycle reset.

@@ -23,6 +23,7 @@
     ]
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "^0.0.77",
     "@shikijs/cli": "^4.0.2",
     "diff": "^9.0.0"
   },

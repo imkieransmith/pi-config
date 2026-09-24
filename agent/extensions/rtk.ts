@@ -1,5 +1,6 @@
 /**
  * Best-effort RTK output compression without changing the checked command's arguments.
+ * Owns the agent's bash tool, so it also routes commands through ./shared/sandbox.ts.
  * Based on https://github.com/sherif-fanous/pi-rtk
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -9,6 +10,7 @@ import { promisify } from "node:util";
 import { explainLater, startExplaining } from "./tool-pills/explain.ts";
 import { bashRow } from "./tool-pills/renderers.ts";
 import { redact_value } from "./redact.ts";
+import { SANDBOX_NOTE, sandboxedBashOperations } from "./shared/sandbox.ts";
 
 const run = promisify(execFile);
 const CACHE_LIMIT = 256;
@@ -36,9 +38,11 @@ export default function (pi: ExtensionAPI) {
     cache.clear();
     startExplaining(ctx);
   });
-  const tool = createBashToolDefinition(process.cwd());
+  // The agent's commands run sandboxed; the user's own `!` commands below do not.
+  const tool = createBashToolDefinition(process.cwd(), { operations: sandboxedBashOperations(process.cwd()) });
   pi.registerTool({
     ...tool,
+    description: `${tool.description}\n\n${SANDBOX_NOTE}`,
     async execute(id, args, signal, _update, ctx) {
       const command = await rewrite(args.command, signal);
       // Withhold raw streaming text; final output is redacted before display/storage.
