@@ -14,7 +14,7 @@ Some extensions began as other people's work; I link to their sources in the cod
 - **Custom Footer** (`custom-footer`): Compact footer showing the path, context use, and model.
 - **Evidence Store** (`evidence.ts`): Saves source snippets, finds repeats, and checks citations before final answers.
 - **Herdr Agent State** (`herdr-agent-state.ts`): Reports agent state to herdr. Herdr writes this file; don't edit it by hand.
-- **Landing Page** (`landing/`): Shows a light watercolour backdrop and a card with the commands, skills, and tools.
+- **Landing Page** (`landing/`): Shows a pale, dithered cloud bank behind the commands, skills, and tools. It fades softly behind the text and breathes until the first prompt.
 - **Meep** (`meep.ts`): Says meep when the model finishes.
 - **Plan Command** (`plan.ts`): Starts the write-plan skill. Automatically used, or started with `/plan <request>`.
 - **Redact Sensitive Data** (`redact.ts`): Masks known secrets in tool output.
