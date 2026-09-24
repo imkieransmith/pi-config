@@ -455,7 +455,7 @@ test("response metrics join the final response: its colour and no blank line bet
   renderEntry.call(host, { data: {} }, {}, theme); // Rebuilds must not wrap twice.
   const lines = host.render(40);
   assert.equal(lines.length, 2);
-  assert.ok(lines.every((line: string) => line.startsWith("\x1b[48;2;231;240;255m")));
+  assert.ok(lines.every((line: string) => line.startsWith("\x1b[48;2;232;247;237m")));
 });
 
 test("sounds use prompt/settled events and remain quiet outside TUI", async () => {

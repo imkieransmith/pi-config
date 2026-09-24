@@ -1,11 +1,10 @@
 /**
  * Message background colours.
  *
- * User messages and final responses get their own colours. Work in between
- * (thinking, text alongside tool calls, and the gaps between tool rows) uses a
- * lighter shade of the light theme's tool green (#e8f0e8), so tool rows stand
- * out a little from the work around them.
- * Tool renderers such as tool-pills keep drawing their own rows.
+ * User messages are blue and final responses green. Work in between (thinking,
+ * text alongside tool calls, and the tool rows themselves) uses the theme's
+ * custom message colour, the purple of compaction summaries, as one block.
+ * Failed tool rows keep the theme's red.
  * Leave loaders alone: Pi also uses them inside the editor's top border.
  */
 
@@ -25,9 +24,8 @@ type PaintMode = "user" | "work" | "assistant";
 const PATCHED = Symbol.for("pi-extension:colour-messages:patched-render");
 const ORIGINAL_RENDER = Symbol.for("pi-extension:colour-messages:original-render");
 
-const USER_COLOUR = "#f4eee2";
-const ASSISTANT_COLOUR = "#e7f0ff";
-const WORK_COLOUR = "#f1f7f1";
+const USER_COLOUR = "#e7f0ff";
+const ASSISTANT_COLOUR = "#e8f7ed";
 
 const CSI_BG_RESET_RE = /\x1b\[49m/g;
 const CSI_FULL_RESET_RE = /\x1b\[0m/g;
@@ -49,10 +47,10 @@ function splitLeadingOsc(line: string): [string, string] {
 	return [line.slice(0, index), line.slice(index)];
 }
 
-/** `swap` is a background Pi already painted that should become `bgAnsi`. */
-export function paintLine(line: string, width: number, bgAnsi: string, swap?: string): string {
+/** `swap` lists backgrounds Pi already painted that should become `bgAnsi`. */
+export function paintLine(line: string, width: number, bgAnsi: string, swap: string[] = []): string {
 	const [prefix, raw] = splitLeadingOsc(line);
-	const rest = swap ? raw.replaceAll(swap, bgAnsi) : raw;
+	const rest = swap.reduce((text, ansi) => text.replaceAll(ansi, bgAnsi), raw);
 	const padded = rest + " ".repeat(Math.max(0, width - visibleWidth(rest)));
 	const normalized = padded
 		.replace(CSI_BG_RESET_RE, bgAnsi)
@@ -60,7 +58,7 @@ export function paintLine(line: string, width: number, bgAnsi: string, swap?: st
 	return `${prefix}${bgAnsi}${normalized}\x1b[49m`;
 }
 
-function paintLines(lines: string[], width: number, bgAnsi: string, swap?: string): string[] {
+function paintLines(lines: string[], width: number, bgAnsi: string, swap?: string[]): string[] {
 	return lines.map((line) => paintLine(line, width, bgAnsi, swap));
 }
 
@@ -89,7 +87,7 @@ export function patchRender(
 	modeForInstance: PaintMode | ((instance: any) => PaintMode),
 	colours: Record<PaintMode, string>,
 	{ swap, dropLeadingBlank = false, endWithBlank }: {
-		swap?: string;
+		swap?: string[];
 		dropLeadingBlank?: boolean;
 		/** Adds a blank line after instances whose last line has text. */
 		endWithBlank?: (instance: any) => boolean;
@@ -118,6 +116,39 @@ export function patchRender(
   };
 }
 
+/**
+ * Pi puts a blank Spacer above each user message and summary block, which
+ * shows as an unpainted line between two coloured blocks. Skip it while
+ * drawing when both neighbours are coloured, since they carry their own
+ * padding. Plain status lines (reload notices, errors) keep it as their gap.
+ * Deciding at draw time also covers messages added before this patch loaded.
+ */
+export function dropGapsBetweenBlocks(
+	container: { prototype: { render(width: number): string[] } },
+	opensBlock: Array<new (...args: any[]) => unknown>,
+	paintedBlock: Array<new (...args: any[]) => unknown>,
+): () => void {
+	const original = container.prototype.render;
+	const isPainted = (item: any) =>
+		Boolean(item?.[PATCHED] || item?.[FOOTER]) || paintedBlock.some((type) => item instanceof type);
+	container.prototype.render = function (this: { children: unknown[] }, width: number) {
+		const children = this.children;
+		const kept = children.filter((child: any, i) =>
+			!(child?.constructor?.name === "Spacer" && isPainted(children[i - 1]) && opensBlock.some((type) => children[i + 1] instanceof type)));
+		if (kept.length === children.length) return original.call(this, width);
+		this.children = kept;
+		try {
+			return original.call(this, width);
+		} finally {
+			this.children = children;
+		}
+	};
+	const patched = container.prototype.render;
+	return () => {
+		if (container.prototype.render === patched) container.prototype.render = original;
+	};
+}
+
 // ===========================================================================
 // MONKEY-PATCH (pi internals): this extension overrides the `render()` method on
 // pi's private message components. The CLI bundles those classes into a
@@ -128,7 +159,9 @@ export function patchRender(
 // Fragility / maintenance — this WILL break if pi changes any of:
 //   - the `dist/bundle/cli.js` / `cli-runtime.js` entrypoint shape,
 //   - the main chunk's exported class names (UserMessageComponent,
-//     AssistantMessageComponent, ToolExecutionComponent),
+//     AssistantMessageComponent, ToolExecutionComponent, Container),
+//   - the unexported Spacer class keeping its name, and Pi adding one to
+//     chatContainer just before each user message and summary block,
 //   - those classes' `render(width)` methods,
 //   - AssistantMessageComponent's `hasToolCalls` field used to tell an
 //     intermediate working turn from a final response.
@@ -183,15 +216,24 @@ export default function (pi: ExtensionAPI) {
     if (ctx.mode !== "tui") return;
     const theme = ctx.ui.theme;
     const colours = {
-      user: hexToBgAnsi(USER_COLOUR), work: hexToBgAnsi(WORK_COLOUR), assistant: hexToBgAnsi(ASSISTANT_COLOUR),
+      user: hexToBgAnsi(USER_COLOUR), work: theme.getBgAnsi("customMessageBg"), assistant: hexToBgAnsi(ASSISTANT_COLOUR),
     };
-    const { UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent } = await import(resolvePiRuntimeModuleUrl());
+    const {
+      UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent, Container,
+      CompactionSummaryMessageComponent, BranchSummaryMessageComponent,
+    } = await import(resolvePiRuntimeModuleUrl());
+    const summaries = [CompactionSummaryMessageComponent, BranchSummaryMessageComponent];
     undo = [
+      dropGapsBetweenBlocks(Container, [UserMessageComponent, ...summaries], summaries),
       // Pi paints user messages with the theme's userMessageBg; swap it for ours.
-      patchRender(UserMessageComponent.prototype, "user", colours, { swap: theme.getBgAnsi("userMessageBg") }),
+      patchRender(UserMessageComponent.prototype, "user", colours, { swap: [theme.getBgAnsi("userMessageBg")] }),
       // Tool rows carry their own top/bottom padding (tool-pills), so drop Pi's blank line above each one.
       // Pi still maps clicks as if that line were there, so only the top padding line ignores clicks.
-      patchRender(ToolExecutionComponent.prototype, "work", colours, { dropLeadingBlank: true }),
+      // Running and finished tools join the work block; failed ones keep toolErrorBg.
+      patchRender(ToolExecutionComponent.prototype, "work", colours, {
+        dropLeadingBlank: true,
+        swap: [theme.getBgAnsi("toolPendingBg"), theme.getBgAnsi("toolSuccessBg")],
+      }),
       // Pi pads assistant text above but not below. Working text also sits directly above its
       // tools, which no longer have a gap of their own.
       patchRender(AssistantMessageComponent.prototype, (instance: { hasToolCalls?: boolean }) => instance.hasToolCalls ? "work" : "assistant", colours, {

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getPackageDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import colourMessages, { paintLine, patchRender } from "../colour-messages/index.ts";
+import colourMessages, { dropGapsBetweenBlocks, paintLine, patchRender } from "../colour-messages/index.ts";
 
 // Use the same bundled classes as the CLI, not unbundled lookalikes.
 test("message colours leave the native shared loader unchanged across startup and reload", async t => {
@@ -40,7 +40,7 @@ test("message colours leave the native shared loader unchanged across startup an
 
 test("user messages swap Pi's background for ours across the whole line", () => {
   const pi = "\x1b[48;2;232;232;232m", ours = "\x1b[48;2;244;238;226m";
-  const line = paintLine(`${pi} hi \x1b[49m`, 8, ours, pi);
+  const line = paintLine(`${pi} hi \x1b[49m`, 8, ours, [pi]);
   assert.ok(!line.includes(pi));
   assert.equal(line, `${ours}${ours} hi ${ours}    \x1b[49m`);
 });
@@ -61,4 +61,26 @@ test("endWithBlank adds one blank line only when chosen and needed", () => {
   assert.deepEqual(strip(proto.render.call({ lines: ["", "thinking", ""], hasToolCalls: true }, 10)), ["", "thinking", ""]);
   assert.deepEqual(strip(proto.render.call({ lines: ["", "final"], hasToolCalls: false }, 10)), ["", "final"]);
   undo();
+});
+
+test("blank spacers between two coloured blocks are skipped when drawing", () => {
+  class Container {
+    children: any[] = [];
+    render(width: number): string[] { return this.children.flatMap((c) => c.render(width)); }
+  }
+  class Spacer { render() { return [""]; } }
+  class User { render() { return ["user"]; } }
+  class Summary { render() { return ["summary"]; } }
+  const painted: any = { render: () => ["block"] };
+  patchRender(painted, "work", { user: "", work: "", assistant: "" });
+  const status = { render: () => ["status"] };
+  const chat = new Container();
+  chat.children = [Object.create(painted), new Spacer(), new User(), new Spacer(), new Summary(), new Spacer(), new User(), new Spacer(), status, new Spacer(), new User()];
+  const undo = dropGapsBetweenBlocks(Container, [User, Summary], [Summary]);
+  const [block, ...rest] = chat.render(10);
+  assert.match(block, /^block/);
+  assert.deepEqual(rest, ["user", "", "summary", "user", "", "status", "", "user"]);
+  assert.equal(chat.children.length, 11, "children are restored after drawing");
+  undo();
+  assert.equal(chat.render(10).length, 11);
 });
