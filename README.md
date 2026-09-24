@@ -1,47 +1,43 @@
 # Pi config and extensions
-This repo is my personal Pi coding agent setup. It’s a collection of custom extensions, tools, skills, and configuration I use day to day.
 
-A number of the extensions originally started from work shared by other Pi users. Where that’s the case, I’ve linked back to the original extension in the relevant source file comments. From there I’ve usually tweaked, combined, or rewritten parts to better fit my own workflow, preferences, and local setup.
+This repo holds the Pi extensions, skills, and settings I use each day.
 
-Most packages/extensions are copied into this repo and built on directly rather than pulled in as dependencies. That keeps everything self-contained, means I only have to properly audit the code once, lets me customise things freely, and avoids worrying about upstream changes or security surprises later.
+Some extensions began as other people's work; I link to their sources in the code. I keep most code here so I can review and change it myself. You may find parts useful for your own setup.
 
-The code here is intended as a working personal config rather than a polished package, but it may still be useful to you as a reference if you’re building or adapting your own Pi extensions.
+## Extensions
 
-## What this repo contains
-This repo is a personal Pi setup: agent-facing extensions, skills, and UI helpers that are loaded into Pi sessions.
+- **Advisor** (`advisor`): Get advice from the model set in `agent/settings.json`.
+- **Ask User Question** (`ask-user-question`): Asks multiple-choice or free-text questions in the terminal.
+- **Colour Messages** (`colour-messages`): Gives your messages, work, and final replies different backgrounds.
+- **Confirm Destructive** (`confirm-destructive.ts`): Asks before risky overwrites, deletes, and shell commands. Skips size-based prompts for edits to tracked files.
+- **Context Snapshot** (`context/`): Saves comprehensive work notes, added to context after compaction.
+- **Custom Footer** (`custom-footer`): Compact footer showing the path, context use, and model.
+- **Evidence Store** (`evidence.ts`): Saves source snippets, finds repeats, and checks citations before final answers.
+- **Herdr Agent State** (`herdr-agent-state.ts`): Reports agent state to herdr. Herdr writes this file; don't edit it by hand.
+- **Landing Page** (`landing/`): Shows a light watercolour backdrop and a card with the commands, skills, and tools.
+- **Meep** (`meep.ts`): Says meep when the model finishes.
+- **Plan Command** (`plan.ts`): Starts the write-plan skill. Automatically used, or started with `/plan <request>`.
+- **Redact Sensitive Data** (`redact.ts`): Masks known secrets in tool output.
+- **Response Metrics** (`response-metrics.ts`): Shows time, tool calls, tokens, and the main model's output rate.
+- **RTK Rewrite** (`rtk.ts`): Uses `rtk rewrite` to shorten some shell output.
+- **Security Guard** (`security/`): Checks risky commands and private files. Agents may read git and GitHub, but must ask before any write to them.
+- **Standalone Working** (`standalone-working.ts`): Shows working status above the input, not inside it.
+- **Tool Pills** (`tool-pills`): Shows tool calls on one line; click or press Ctrl+O to see output. Tool images show only in open rows when `terminal.showImages` is false.
+- **Web** (`web.ts`): Adds `web_search` and `web_fetch` through Jina. Search needs `JINA_API_KEY` in the environment or `~/.pi/.env`; fetch does not. Long pages go to `/tmp`.
 
-### Extensions
-- **Advisor** (`advisor`) — One consultation tool with a required brief. The reviewer model and effort come from `advisor` in `agent/settings.json` (e.g. `{ "model": "openai-codex/gpt-6-astra", "effort": "high" }`); without a model the tool is off and the footer says so. It receives a bounded snapshot of recent work and retries transient errors up to twice (after 2s and 4s), using Pi's retry helper. Progress shows retries; cancellation stops them. Reported usage includes failed attempts. `/advisor status` and `/advisor debug` expose diagnostics.
-- **Ask User Question** (`ask-user-question`) — TUI-only multiple-choice and free-text questions. Long headers are accepted and shortened for display.
-- **Colour Messages** (`colour-messages`) — Background colours: blue for your messages, the theme's compaction purple for work (thinking and tool rows; failed tools stay red), green for final responses and their turn stats. Leaves native loaders and editor borders unchanged.
-- **Confirm Destructive** (`confirm-destructive.ts`) — Confirm risky overwrites, removals and destructive commands. Edits to Git-tracked files skip size-based prompts, including files with uncommitted changes; untracked files keep the removal check.
-- **Context Snapshot** (`context/`) — Append-only durable work captures with a bounded, freshly replaced recent-summary appendix after Pi compacts.
-- **Custom Footer** (`custom-footer`) — One line with path, context and model info. Advisor status stays hidden unless unavailable; warnings appear inline.
-- **Evidence Store** (`evidence.ts`) — Validated durable snippets with deduplication, paginated discovery, exact final-citation verification, and TUI-only proof.
-- **Herdr Agent State** (`herdr-agent-state.ts`) — Reports agent state to the herdr host. Installed and overwritten by herdr; don't edit it by hand.
-- **Landing Page** (`landing/`) — First screen: a soft watercolour haze in half blocks, three see-through washes glazed over each other, thickest at the screen edges and fading to bare paper round the middle. New each launch; each wash swells and fades in a wave that travels round the frame, at its own speed, until the first prompt. A clear card in the middle lists the actual commands, skills and active tools.
-- **Meep** (`meep.ts`) — Says meep when the model is done working.
-- **Plan Command** (`plan.ts`) — `/plan <request>` expands the write-plan skill. The skill handles captures; the command never force-closes them.
-- **Redact Sensitive Data** (`redact.ts`) — Redact secrets from tool output.
-- **Response Metrics** (`response-metrics.ts`) — Persistent TUI-only elapsed time, tool count, input/output tokens and estimated main-model output tokens/sec. The rate includes request latency but excludes tools, user waits and advisor calls; it uses reported output tokens, not just visible text.
-- **RTK Rewrite** (`rtk.ts`) — Best-effort shell command optimization via `rtk rewrite`.
-- **Security Guard** (`security/`) — Confirms or blocks risky commands and sensitive file access. Agents may read git/GitHub state freely but must ask before any command that changes it (commit, push, pull, reset, stash, `gh pr create`, `npm version`...).
-- **Standalone Working** (`standalone-working.ts`) - Keeps the working status on its own row above the input, using Pi's native editor without an embedded border indicator.
-- **Superset Hooks** (`superset-hooks.ts`) — Emit Superset lifecycle hooks so the host shows a working indicator.
-- **Tool Pills** (`tool-pills`) — One-line tool rows (pill, command, short note such as `3 lines` or `+2 −1`) with output hidden until you click the row in fullscreen mode or press Ctrl+O. Covers bash, read, ls, find, grep, edit, write, the web tools, advisor, ask user, evidence and snapshot. Images from read and web_fetch show in the open row only; `terminal.showImages: false` in `settings.json` stops Pi drawing them under every row. Our own tools get a deep blue pill; the advisor keeps its own copy of the row so its folder stays self-contained.
-- **Web** (`web.ts`) — `web_search` and `web_fetch` tools via Jina. Search needs `JINA_API_KEY` in the environment or `~/.pi/.env`; fetch works without it. Long pages show the first 20KB and save the full text under `/tmp`.
+## Skills
 
-### Skills
-Skills live under `agent/skills/` and provide task-specific instructions that agents load on demand, such as evidence capture and structured planning.
+Skills live in `agent/skills/`. Agents load them when needed, for tasks such as saving evidence and writing plans.
 
 ## Install
+
 If you use a checkout of this repo as your Pi config, run this from the repo root before starting Pi:
 
 ```bash
 npm run setup
 ```
 
-This copies any missing keys from `agent/base-settings.json` into your local `agent/settings.json` without changing values you already set. The base covers the light theme, fullscreen mode, quiet startup, tool images and the advisor model.
+This adds missing keys from `agent/base-settings.json` to your local `agent/settings.json`. It keeps the values you already set.
 
 You can also install the extensions directly:
 
@@ -49,7 +45,8 @@ You can also install the extensions directly:
 pi install git:github.com/imkieransmith/pi-config
 ```
 
-The setup command writes to the checkout's `agent/settings.json`, not to your settings after a direct install. For a direct install, copy the needed values from `agent/base-settings.json` into your own settings by hand. I'd recommend copying the parts you want into your own config and building on top of them instead. That’s how this repo evolved in the first place, and it makes it much easier to fully understand, customise, and maintain your own setup long term.
+I recommend copying the parts you want into your own config and building on top of them instead. That's how this repo evolved in the first place, and it makes it much easier to fully understand, customise, and maintain your own setup long term.
 
 ## License
-MIT. Attribution for code that originally came from other Pi users is linked in the relevant source files where applicable.
+
+MIT. Source credits for code from other Pi users are in the relevant files.
