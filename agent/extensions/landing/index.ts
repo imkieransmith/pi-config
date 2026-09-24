@@ -5,7 +5,7 @@
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { VERSION } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { basename } from "node:path";
 import { cellsToAnsi, composite, hex, paintWashes, type RGB, type Washes } from "./watercolour.ts";
 
@@ -26,30 +26,67 @@ const breathe = (ms: number, angle: Float32Array) => {
 /** Every frame redraws the whole page (~100KB), so keep the rate modest. */
 const FRAME_MS = 150;
 
+/** Card grid: items sit this far in under their label, with this gap between columns. */
+const INDENT = 2, GAP = 3;
+/** Widest the card grows, when the terminal has room. */
+const MAX_CARD = 80;
+
+/**
+ * Two columns shared by every section, so they line up. Each column is as wide
+ * as the longest item; if two won't fit, the grid falls back to one.
+ */
+function columns(items: string[], width: number): { cols: number; cell: number } {
+	const cell = Math.max(0, ...items.map((item) => visibleWidth(item)));
+	const cols = INDENT + 2 * cell + GAP <= width ? 2 : 1;
+	return { cols, cell };
+}
+
+/** Lay items out row by row. */
+function grid(items: string[], { cols, cell }: { cols: number; cell: number }): string[] {
+	return Array.from({ length: Math.ceil(items.length / cols) }, (_, row) => items
+		.slice(row * cols, (row + 1) * cols)
+		.map((item) => item + " ".repeat(cell - visibleWidth(item)))
+		.join(" ".repeat(GAP))
+		.trimEnd());
+}
+
 /** The text on the clear card: title, where you are, then what's loaded. */
 export function renderCard(pi: ExtensionAPI, theme: Theme, width: number, where: string): string[] {
 	if (width < 1) return [];
-	const commands = pi.getCommands().filter((c) => c.source !== "skill").map((c) => `/${c.name}`).sort();
-	const skills = pi.getCommands().filter((c) => c.source === "skill").map((c) => c.name.replace(/^skill:/, ""));
-	const label = 10;
-	const section = (name: string, items: string[], colour: "accent" | "muted") => {
-		if (!items.length) return [];
-		const wrapped = wrapTextWithAnsi(items.join("  "), Math.max(1, width - label));
-		return wrapped.map((line, i) => theme.fg("dim", (i ? "" : name).padEnd(label)) + theme.fg(colour, line));
-	};
+	const sort = (items: string[]) => items.sort((a, b) => a.localeCompare(b));
+	const commands = sort(pi.getCommands().filter((c) => c.source !== "skill").map((c) => `/${c.name}`));
+	const skills = sort(pi.getCommands().filter((c) => c.source === "skill").map((c) => c.name.replace(/^skill:/, "")));
+	const tools = sort([...pi.getActiveTools()]);
+	const layout = columns([...commands, ...skills, ...tools], width);
+	const section = (name: string, items: string[]) => items.length
+		? [theme.bold(theme.fg("accent", name)), ...grid(items, layout).map((row) => " ".repeat(INDENT) + theme.fg("muted", row))]
+		: [];
 	const sections = [
-		section("commands", commands, "accent"),
-		section("skills", skills, "muted"),
-		section("tools", pi.getActiveTools(), "muted"),
+		section("commands", commands),
+		section("skills", skills),
+		section("tools", tools),
 	].filter((lines) => lines.length > 0);
+	// Version and location share a line when they fit; otherwise each gets its own.
+	const version = `v${VERSION}`;
+	const header = visibleWidth(`${version} - ${where}`) <= width
+		? [theme.fg("dim", `${version} - `) + theme.fg("muted", where)]
+		: [theme.fg("dim", version), theme.fg("muted", where)];
 	const lines = [
-		theme.bold(theme.fg("accent", "𝝿")),
+		// A plain π styled bold italic by the terminal, so it comes from your own font.
+		// The ready-made bold italic 𝝿 is missing from most coding fonts.
+		theme.bold(theme.italic(theme.fg("accent", "π"))),
 		"",
-		theme.fg("dim", `v${VERSION} - `) + theme.fg("muted", where),
+		...header,
 		"",
 		...sections.flatMap((lines, i) => i ? ["", ...lines] : lines),
 	];
 	return lines.map((line) => truncateToWidth(line, width));
+}
+
+/** Project, model and thinking level, e.g. "my-app - gpt-6-sol (high)". */
+export function describeWhere(cwd: string, model: string | undefined, thinking: string): string {
+	const level = thinking === "off" ? "no thinking" : thinking;
+	return [basename(cwd) || cwd, model && `${model} (${level})`].filter(Boolean).join(" - ");
 }
 
 interface Scene { key: string; washes: Washes; cardX: number; cardY: number }
@@ -89,22 +126,19 @@ export default function (pi: ExtensionAPI) {
 				tui.requestRender();
 			}, () => {});
 
-			const where = () => {
-				const model = ctx.model?.id;
-				const thinking = pi.getThinkingLevel();
-				return [basename(ctx.cwd) || ctx.cwd, model && thinking ? `${model} (${thinking})` : model].filter(Boolean).join(" - ");
-			};
+			const where = () => describeWhere(ctx.cwd, ctx.model?.id, pi.getThinkingLevel());
 
 			return {
 				dispose: () => stop(),
 				invalidate() { drawn = undefined; },
 				render(width: number): string[] {
 					const height = Math.max(0, tui.terminal.rows - RESERVED_ROWS);
-					const cardW = Math.min(68, width - 4);
-					const card = renderCard(pi, theme, cardW, where());
-					if (width < 60 || height < card.length + 8) return ["", ...card.map((l) => ` ${l}`), ""];
+					const card = renderCard(pi, theme, Math.min(MAX_CARD, width - 4), where());
+					if (width < 60 || height < card.length + 6) return ["", ...card.map((l) => ` ${l}`), ""];
 
-					const key = `${width}x${height}x${card.length}`;
+					// Size the card to its widest line, so the text sits in the middle and the paint comes close.
+					const cardW = Math.max(...card.map((l) => visibleWidth(l)));
+					const key = `${width}x${height}x${card.length}x${cardW}`;
 					if (scene?.key !== key) {
 						const cardX = Math.floor((width - cardW) / 2), cardY = Math.floor((height - card.length) / 2);
 						const clear = { x: cardX - 3, y: cardY - 1, w: cardW + 6, h: card.length + 2 };

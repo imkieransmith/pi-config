@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { join } from "node:path";
 import { createGrepToolDefinition, VERSION, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import plan from "../plan.ts";
 import advisor from "../advisor/index.ts";
 import customFooter from "../custom-footer/custom-footer.ts";
@@ -21,7 +21,7 @@ import { assess_bash_command, assess_tool_call } from "../confirm-destructive.ts
 import { installSessionAllowReset, requestSessionConfirm } from "../shared/confirm-gate.ts";
 import { redact_text, redact_value } from "../redact.ts";
 import { registerDiffTools } from "../tool-pills/diff-renderer.ts";
-import { renderCard } from "../landing/index.ts";
+import { describeWhere, renderCard } from "../landing/index.ts";
 import snapshots from "../context/index.ts";
 import evidence from "../evidence.ts";
 import security from "../security/index.ts";
@@ -52,7 +52,7 @@ export function harness() {
 }
 const theme = {
   fg: (_role: string, text: string) => text, bg: (_role: string, text: string) => text,
-  bold: (text: string) => text, inverse: (text: string) => text,
+  bold: (text: string) => text, italic: (text: string) => text, inverse: (text: string) => text,
 } as Theme;
 const question = { question: "Choose an option", header: "A perfectly normal longer heading", options: [{ label: "Yes" }, { label: "No" }], multiSelect: false };
 
@@ -272,14 +272,31 @@ test("landing card separates nonempty sections and stays within terminal width",
   ];
   const where = "js13k-2026-2 - gpt-6-sol (high)";
   const card = renderCard(pi, theme, 60, where);
-  assert.deepEqual(card.slice(0, 4), ["𝝿", "", `v${VERSION} - ${where}`, ""]);
+  assert.deepEqual(card.slice(0, 4), ["π", "", `v${VERSION} - ${where}`, ""]);
   assert.deepEqual(card.slice(4), [
-    "commands  /evidence", "", "skills    write-plan", "", "tools     read  ask_user_question",
+    "commands", "  /evidence", "", "skills", "  write-plan", "", "tools", "  ask_user_question   read",
   ]);
+  assert.deepEqual(renderCard(pi, theme, 30, where).slice(2, 5), [`v${VERSION}`, truncateToWidth(where, 30), ""]);
+  pi.getCommands = () => ["plan", "anthropic-auth:status", "advisor"].map((name) => ({ name, source: "extension", description: name, sourceInfo }));
+  pi.getActiveTools = () => ["read", "bash", "edit", "write", "advisor", "ask_user_question"];
+  const body = (width: number) => renderCard(pi, theme, width, where).slice(renderCard(pi, theme, width, where).indexOf("commands"));
+  // Every section shares two columns as wide as the longest item, dropping to one rather than let an item spill over.
+  const row = (...items: string[]) => "  " + items.map((item) => item.padEnd(22)).join("   ").trimEnd();
+  assert.deepEqual(body(80), [
+    "commands", row("/advisor", "/anthropic-auth:status"), row("/plan"), "",
+    "tools", row("advisor", "ask_user_question"), row("bash", "edit"), row("read", "write"),
+  ]);
+  assert.equal(renderCard(pi, theme, 48, where).filter((line) => line.startsWith("  ")).length, 9);
   pi.getCommands = () => [];
-  assert.equal(renderCard(pi, theme, 8, where)[0], "𝝿");
+  assert.equal(renderCard(pi, theme, 8, where)[0], "π");
   assert.equal(renderCard(pi, theme, 60, where).filter((line) => line === "").length, 2);
   for (const width of [1, 8, 40, 100]) for (const line of renderCard(pi, theme, width, where)) assert.ok(visibleWidth(line) <= width);
+});
+
+test("landing location names the project, model and thinking level", () => {
+  assert.equal(describeWhere("/code/my-app", "gpt-6-sol", "high"), "my-app - gpt-6-sol (high)");
+  assert.equal(describeWhere("/code/my-app", "gpt-6-sol", "off"), "my-app - gpt-6-sol (no thinking)");
+  assert.equal(describeWhere("/", undefined, "off"), "/");
 });
 
 test("footer keeps statuses inline without empty rows and disposes its subscription", async () => {
