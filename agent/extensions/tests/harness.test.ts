@@ -22,6 +22,11 @@ import { installSessionAllowReset, requestSessionConfirm } from "../shared/confi
 import { redact_text, redact_value } from "../redact.ts";
 import { registerDiffTools } from "../tool-pills/diff-renderer.ts";
 import { renderCard } from "../landing/index.ts";
+import snapshots from "../context/index.ts";
+import evidence from "../evidence.ts";
+import security from "../security/index.ts";
+import redact from "../redact.ts";
+import rtk from "../rtk.ts";
 import metrics, { formatMetricsRow } from "../response-metrics.ts";
 import meep from "../meep.ts";
 import { paintLine, patchRender } from "../colour-messages/index.ts";
@@ -36,6 +41,7 @@ export function harness() {
     on: (name: string, fn: Function) => hooks.set(name, [...hooks.get(name) ?? [], fn]),
     registerTool: (tool: any) => tools.set(tool.name, tool),
     registerCommand: (name: string, command: any) => commands.set(name, command),
+    registerEntryRenderer: () => {},
     getCommands: () => [{ name: "skill:write-plan", source: "skill", description: "Plan work" }],
     getAllTools: () => [],
     getActiveTools: () => active,
@@ -56,6 +62,14 @@ function context(id = "one", manager?: object): ExtensionContext {
     ui: { select: async () => "Allow similar for this session", notify() {} },
   } as unknown as ExtensionContext;
 }
+
+test("background features register tools and hooks without extra commands", () => {
+  const { pi, commands, tools, hooks } = harness();
+  for (const register of [snapshots, evidence, security, redact, rtk]) register(pi);
+  assert.deepEqual([...commands.keys()], ["evidence"]);
+  assert.ok(tools.has("context_snapshot") && tools.has("evidence_add") && tools.has("bash"));
+  assert.ok(hooks.has("tool_result") && hooks.has("tool_call"));
+});
 
 test("session grants reset on reload/new session and do not cross SDK instances", async () => {
   const ctx = context(); const other = context(); const request = { title: "Test", detail: "Synthetic", allowKey: "test" };

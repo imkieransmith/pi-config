@@ -1,14 +1,7 @@
 /**
  * Agent-controlled captures stored durably, with a recent bounded appendix added after Pi compacts.
  *
- * /context - Show this command reference and current snapshot status.
- * /context help - Show this command reference.
- * /context status - Show the active capture, change state, and recent durable summaries.
- * /context list - List durable summaries.
- * /context start [label] - Start a capture before substantial work. Only one capture can be active.
- * /context discard - Close the active capture without saving a durable summary.
- *
- * Agent tool equivalent: context_snapshot can start, finish, discard, inspect status, and list summaries.
+ * The context_snapshot tool starts, finishes, discards, and inspects captures.
  *
  * Inspired by - https://swival.dev/pages/context-management.html
  */
@@ -16,7 +9,6 @@
 import type {
   CustomEntry,
   ExtensionAPI,
-  ExtensionCommandContext,
   ExtensionContext,
   SessionEntry,
   ToolCallEvent,
@@ -32,7 +24,6 @@ import {
 } from "./appendix.ts";
 
 const STATE_CUSTOM_TYPE = "context-snapshot-state";
-const MESSAGE_CUSTOM_TYPE = "context-snapshot";
 const STATE_VERSION = 1;
 const SUMMARY_CAP = 5000;
 const TOOL_OUTPUT_CAP = 6000;
@@ -98,7 +89,6 @@ export interface SessionState {
   summaries: DurableSummary[];
 }
 
-export type SnapshotContext = ExtensionCommandContext | ExtensionContext;
 
 const states = new Map<string, SessionState>();
 const pendingMutations = new Map<string, { toolName: string; reason: string }>();
@@ -129,11 +119,11 @@ function emptyState(): SessionState {
   return { summaries: [] };
 }
 
-function getSessionId(ctx: SnapshotContext): string {
+function getSessionId(ctx: ExtensionContext): string {
   return ctx.sessionManager.getSessionId();
 }
 
-export function stateFor(ctx: SnapshotContext): SessionState {
+export function stateFor(ctx: ExtensionContext): SessionState {
   const sessionId = getSessionId(ctx);
   let state = states.get(sessionId);
   if (!state) {
@@ -147,7 +137,7 @@ function resetState(sessionId: string): void {
   states.delete(sessionId);
 }
 
-function rebuildState(ctx: SnapshotContext): SessionState {
+function rebuildState(ctx: ExtensionContext): SessionState {
   const state = hydrateState(ctx.sessionManager.getBranch());
   states.set(getSessionId(ctx), state);
   return state;
@@ -222,7 +212,7 @@ function appendStateEvent(pi: ExtensionAPI, event: SnapshotStateEvent): void {
   pi.appendEntry(STATE_CUSTOM_TYPE, event);
 }
 
-export function startCapture(pi: ExtensionAPI, ctx: SnapshotContext, label: string | undefined): string {
+export function startCapture(pi: ExtensionAPI, ctx: ExtensionContext, label: string | undefined): string {
   const state = stateFor(ctx);
   if (state.active) {
     throw new Error(
@@ -251,7 +241,7 @@ export function startCapture(pi: ExtensionAPI, ctx: SnapshotContext, label: stri
   return capture.id;
 }
 
-function discardCapture(pi: ExtensionAPI, ctx: SnapshotContext): string {
+function discardCapture(pi: ExtensionAPI, ctx: ExtensionContext): string {
   const state = stateFor(ctx);
   if (!state.active) throw new Error("no active context capture to discard");
 
@@ -269,7 +259,7 @@ function discardCapture(pi: ExtensionAPI, ctx: SnapshotContext): string {
 
 export function finishCapture(
   pi: ExtensionAPI,
-  ctx: SnapshotContext,
+  ctx: ExtensionContext,
   summary: string | undefined,
   force: boolean,
 ): DurableSummary {
@@ -413,95 +403,6 @@ function formatFinishedSummary(summary: DurableSummary): string {
   );
 }
 
-function showCommandMessage(pi: ExtensionAPI, content: string): void {
-  pi.sendMessage({
-    customType: MESSAGE_CUSTOM_TYPE,
-    content: truncate(content, TOOL_OUTPUT_CAP),
-    display: true,
-    details: {},
-  }, { triggerTurn: false });
-}
-
-function formatCommandHelp(): string {
-  return [
-    "Context snapshots",
-    "",
-    "/context",
-    "  Show this command reference and current snapshot status.",
-    "",
-    "/context help",
-    "  Show this command reference.",
-    "",
-    "/context status",
-    "  Show the active capture, whether changes were observed, and recent durable summaries.",
-    "",
-    "/context list",
-    "  List durable summaries.",
-    "",
-    "/context start <label>",
-    "  Start a capture before substantial work. Only one capture can be active.",
-    "",
-    "/context discard",
-    "  Close the active capture without saving a durable summary.",
-    "",
-    "Pi's built-in /compact command and automatic compaction append recent durable summaries.",
-    "",
-    "Agent tool equivalent: context_snapshot can start, finish, discard, inspect status, and list summaries.",
-  ].join("\n");
-}
-
-function parseCommand(args: string): { action: string; rest: string } {
-  const trimmed = (args ?? "").trim();
-  if (!trimmed) return { action: "help", rest: "" };
-
-  const [rawAction, ...rest] = trimmed.split(/\s+/);
-  return { action: rawAction.toLowerCase(), rest: rest.join(" ") };
-}
-
-async function runCommand(
-  pi: ExtensionAPI,
-  args: string,
-  ctx: ExtensionCommandContext,
-): Promise<void> {
-  const { action, rest } = parseCommand(args);
-
-  try {
-    if (action === "help" || action === "?") {
-      showCommandMessage(pi, `${formatCommandHelp()}\n\nCurrent status:\n${formatStatus(stateFor(ctx))}`);
-      return;
-    }
-
-    if (action === "status") {
-      showCommandMessage(pi, formatStatus(stateFor(ctx)));
-      return;
-    }
-
-    if (action === "list") {
-      showCommandMessage(pi, formatSummaryList(stateFor(ctx)));
-      return;
-    }
-
-    if (action === "start") {
-      const captureId = startCapture(pi, ctx, rest);
-      showCommandMessage(pi, `started capture ${captureId}: ${cleanLabel(rest)}`);
-      return;
-    }
-
-    if (action === "discard") {
-      const captureId = discardCapture(pi, ctx);
-      showCommandMessage(pi, `discarded capture ${captureId}`);
-      return;
-    }
-
-    showCommandMessage(
-      pi,
-      `Unknown /context action '${action}'.\n\n${formatCommandHelp()}`,
-    );
-  } catch (error) {
-    showCommandMessage(pi, error instanceof Error ? error.message : String(error));
-  }
-}
-
 export default function (pi: ExtensionAPI) {
   // Lifecycle
 
@@ -577,30 +478,6 @@ export default function (pi: ExtensionAPI) {
 
     const suffix = event.isError ? "failed " : "";
     markChangesObserved(pi, ctx, `${suffix}${mutation.reason}`, mutation.toolName);
-  });
-
-  // Commands
-
-  pi.registerCommand("context", {
-    description: "Manage durable context snapshots.",
-    getArgumentCompletions: (prefix: string) => {
-      const options = [
-        { value: "help", description: "Show the command reference and current status." },
-        { value: "status", description: "Show the active capture and recent durable summaries." },
-        { value: "list", description: "List durable summaries." },
-        { value: "start", description: "Start a capture before substantial work." },
-        { value: "discard", description: "Close the active capture without a durable summary." },
-      ];
-      const normalized = (prefix ?? "").trim().toLowerCase();
-      const items = options
-        .filter((item) => item.value.startsWith(normalized))
-        .map((item) => ({ value: item.value, label: item.value, description: item.description }));
-
-      return items.length > 0 ? items : null;
-    },
-    handler: async (args: string, ctx: ExtensionCommandContext) => {
-      await runCommand(pi, args, ctx);
-    },
   });
 
   // Tool

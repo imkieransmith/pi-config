@@ -14,26 +14,24 @@ const CACHE_LIMIT = 256;
 
 export default function (pi: ExtensionAPI) {
   const cache = new Map<string, string>();
-  let attempts = 0, rewrites = 0;
   async function rewrite(command: string, signal?: AbortSignal): Promise<string> {
     // Shell composition and substitutions require a shell parser. Leave them untouched.
     if (/[\n;&|`$()<>]/.test(command)) return command;
     const cached = cache.get(command);
     if (cached) return cached;
-    attempts++;
     let result = command;
     try {
       const { stdout } = await run("rtk", ["rewrite", command], { timeout: 1500, maxBuffer: 64_000, signal });
       const proposed = stdout.trimEnd();
       // RTK may propose argument/subcommand changes. Accept only an exact prefix,
       // so neither safety gate can approve one target and execute another.
-      if (proposed === `rtk ${command}`) { result = proposed; rewrites++; }
+      if (proposed === `rtk ${command}`) result = proposed;
     } catch { /* Unavailable/unsupported RTK leaves Bash usable. */ }
     if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value!);
     cache.set(command, result);
     return result;
   }
-  pi.on("session_start", () => { cache.clear(); attempts = 0; rewrites = 0; });
+  pi.on("session_start", () => { cache.clear(); });
   const tool = createBashToolDefinition(process.cwd());
   pi.registerTool({
     ...tool,
@@ -51,11 +49,5 @@ export default function (pi: ExtensionAPI) {
     const command = await rewrite(event.command);
     if (command === event.command) return;
     return { operations: { exec: (original, cwd, options) => local.exec(original === event.command ? command : original, cwd, options) } };
-  });
-  pi.registerCommand("rtk", {
-    description: "Show bounded RTK rewrite statistics",
-    handler: async (_args, ctx) => {
-      ctx.ui.notify(`RTK: ${rewrites}/${attempts} rewrites; ${cache.size}/${CACHE_LIMIT} cached. Only unchanged command/arguments with an RTK prefix are accepted.`, "info");
-    },
   });
 }

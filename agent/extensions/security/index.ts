@@ -16,7 +16,7 @@
  *
  * Original - https://github.com/michalvavra/agents/blob/main/agents/pi/extensions/security.ts
  */
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -386,57 +386,8 @@ function toolString(input: unknown, field: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-const MESSAGE_CUSTOM_TYPE = "security-status";
-
-function formatSecurityStatus(): string {
-  return [
-    "Security extension",
-    "status: active (accident prevention, not a shell/filesystem sandbox)",
-    "protects:",
-    "- blocks high-risk bash patterns such as privilege escalation, destructive disk commands, remote script execution, environment disclosure, and secret exfiltration patterns",
-    "- confirms package manager, container, network fetch, in-place rewrite, and project script commands when an interactive UI is available (with an 'allow for this session' option)",
-    "- allows read-only git and gh commands; asks before any git command that changes a repo, history or remote (commit, push, pull, reset, stash, checkout...), gh write commands, and npm/pnpm/yarn version. 'Allow for this session' applies per command kind",
-    "- defers file data-loss prompts (rm, find -delete, truncate) to the confirm-destructive extension to avoid double prompts",
-    "- blocks reads/discovery/mutations of common secret paths such as .env, .ssh, .gnupg, cloud/CLI credential directories, credential dotfiles, private keys, and known credential filenames",
-    "- allows ordinary reads and discovery anywhere without prompts; protected descendants are removed from built-in search results",
-    "- allows built-in reads, discovery, and mutations anywhere under canonical /tmp without confirmation; symlink escapes are still classified by their real destination",
-    "- treats an active ~/.pi workspace like a normal project for reads/discovery and allows changes to personal extensions, skills, and settings",
-    "- asks once per session before accessing ~/.pi/agent/models.json, while blocking auth, generated model state, sessions, logs, caches, state, and debug payloads",
-    "- asks before modifying Pi authoring surfaces when ~/.pi is not the active workspace",
-    "- blocks file mutation outside the current project and inside node_modules",
-    "- asks for confirmation before modifying executable project configuration such as package.json, lockfiles, shell scripts, CI config, and task files",
-  ].join("\n");
-}
-
-function showCommandMessage(pi: ExtensionAPI, content: string): void {
-  pi.sendMessage({
-    customType: MESSAGE_CUSTOM_TYPE,
-    content,
-    display: true,
-    details: {},
-  }, { triggerTurn: false });
-}
-
 export default function (pi: ExtensionAPI) {
   installSessionAllowReset(pi);
-
-  pi.registerCommand("security", {
-    description: "Show security gate status and protected actions.",
-    getArgumentCompletions: (prefix: string) => {
-      return "status".startsWith((prefix ?? "").trim().toLowerCase())
-        ? [{ value: "status", label: "status", description: "Show active security protections." }]
-        : null;
-    },
-    handler: async (args: string, _ctx: ExtensionCommandContext) => {
-      const action = (args ?? "").trim().toLowerCase();
-      if (!action || action === "status" || action === "help") {
-        showCommandMessage(pi, formatSecurityStatus());
-        return;
-      }
-
-      showCommandMessage(pi, `Unknown /security action '${action}'. Try /security status.`);
-    },
-  });
 
   pi.on("tool_call", async (event, ctx) => {
     try {

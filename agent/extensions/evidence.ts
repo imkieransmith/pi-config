@@ -200,7 +200,7 @@ export default function (pi: ExtensionAPI) {
 
       if (!raw) {
         showEvidenceEntry(
-          `Usage: /proof <evidence_id> or /evidence page <before_id> [limit]\n\n${formatEvidencePage(listEvidencePage(store))}`,
+          `Usage: /evidence <evidence_id> or /evidence page <before_id> [limit]\n\n${formatEvidencePage(listEvidencePage(store))}`,
           "list",
         );
         return;
@@ -239,7 +239,6 @@ export default function (pi: ExtensionAPI) {
     },
   };
 
-  pi.registerCommand("proof", evidenceCommand);
   pi.registerCommand("evidence", evidenceCommand);
 
   // ── Tools ─────────────────────────────────────────────────────────────────

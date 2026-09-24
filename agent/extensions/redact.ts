@@ -248,21 +248,11 @@ export function redact_value(value: unknown, seen = new WeakMap<object, unknown>
 }
 
 export default function filter_output(pi: ExtensionAPI) {
-  let totalRedacted = 0;
-  pi.on('session_start', () => { totalRedacted = 0; });
   pi.on('tool_result', async event => {
     const content = event.content.map(item => {
       if (!is_text_content(item)) return item;
-      const result = redact_text(item.text, { force_ssh_config: should_force_ssh_config_redaction(event) });
-      totalRedacted += result.count;
-      return { ...item, text: result.redacted };
+      return { ...item, text: redact_text(item.text, { force_ssh_config: should_force_ssh_config_redaction(event) }).redacted };
     });
     return { content, details: redact_value(event.details) };
-  });
-  pi.registerCommand('redact-stats', {
-    description: 'Show the count of redactions in final tool text (not detail-field redactions)',
-    handler: async (_args, ctx) => {
-      if (ctx.hasUI) ctx.ui.notify(`Additional final-hook redactions this session: ${totalRedacted} (built-in wrappers redact earlier)`);
-    },
   });
 }
