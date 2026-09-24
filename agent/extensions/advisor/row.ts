@@ -37,7 +37,7 @@ function header(head: string, noteText: string, width: number, expanded: boolean
 	const room = Math.max(10, width - (noteWidth ? noteWidth + 2 : 0));
 	const [first, ...rest] = head.split("\n");
 	const lines = expanded
-		? head.split("\n").flatMap((line) => wrapTextWithAnsi(line, room))
+		? [...wrapTextWithAnsi(first, room), "", ...rest.flatMap((line) => wrapTextWithAnsi(line, room))]
 		: [truncateToWidth(rest.length ? `${first}${theme.fg("dim", " …")}` : first, room)];
 	lines[0] += " ".repeat(Math.max(1, width - visibleWidth(lines[0]) - noteWidth)) + noteText;
 	return lines;

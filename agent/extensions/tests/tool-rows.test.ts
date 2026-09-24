@@ -45,10 +45,21 @@ test("cut rows keep their tint after the ellipsis", () => {
 
 test("expanded rows show the full command and output", () => {
   const lines = draw(output, { expanded: true }).slice(1, -1);
-  assert.equal(draw(output, { expanded: true }).filter(l => l === "").length, 2, "one padding line each end, none between");
+  assert.equal(draw(output, { expanded: true }).filter(l => l === "").length, 3, "one blank line after the title, plus outer padding");
   assert.match(lines[0], /3 lines ▾$/);
   assert.ok(lines.some(l => l.includes("git status --short")));
   assert.deepEqual(lines.slice(-3).map(l => l.trim()), ["pass 82", "fail 0", "M README.md"]);
+});
+
+test("expanded rows with a single-line call leave space before the output", () => {
+  const read = row({ name: "read", call: () => "file.txt" });
+  const ctx: any = { state: {}, expanded: true, isError: false, isPartial: false, args: {} };
+  const call = read.renderCall({}, theme, ctx);
+  const body = read.renderResult({ content: [{ type: "text", text: "file contents" }], details: undefined }, { expanded: true }, theme, ctx);
+  const lines = [...call.render(80), ...body.render(80)].map(l => l.trim());
+  assert.match(lines[1], /read +file\.txt/);
+  assert.equal(lines[2], "");
+  assert.equal(lines[3], "file contents");
 });
 
 test("failed rows stay collapsed and show the exit code", () => {
@@ -197,6 +208,7 @@ test("bash rows swap in a plain-English headline and keep the command when open"
   live.expanded = true;
   const open = strip(bashRow.renderCall({ command: unique }, theme, live).render(200));
   assert.match(open[1], /Runs the tests and lists changed files\./);
+  assert.equal(open[2], "", "space between the title and the full command");
   assert.ok(open.some(l => l.includes("git status --short")), "raw command below the sentence");
 
   // Rebuild from saved entries as /reload or /resume does, without asking Luna.
