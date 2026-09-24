@@ -13,14 +13,18 @@ import { pill } from "./pill.ts";
 type Result = AgentToolResult<any>;
 /** Pi passes this to renderers; the package doesn't export its type. `state` is shared by one row's call and result. */
 type Png = { data: string; mimeType: string };
-type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2] & {
-  state: { note?: string; hasBody?: boolean; png?: Record<number, Png | "pending" | "failed"> };
+export type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2] & {
+  state: {
+    note?: string; hasBody?: boolean; png?: Record<number, Png | "pending" | "failed">;
+    /** bash only: the plain-English sentence, and whether one has been asked for (explain.ts). */
+    plain?: string; asked?: boolean;
+  };
 };
 
 export type RowSpec<Args = any> = {
   name: string;
   /** Text after the pill. May span lines; collapsed rows show the first line only. */
-  call: (args: Args, theme: Theme) => string;
+  call: (args: Args, theme: Theme, ctx: RenderContext) => string;
   /** Short note for the right edge of a successful row. Defaults to the output's line count. */
   note?: (result: Result, args: Args) => string;
   /** Expanded output. Defaults to the text output. */
@@ -115,7 +119,7 @@ export function row<Args>(spec: RowSpec<Args>) {
         const done = !ctx.isPartial;
         const text = [ctx.state.note, done ? (ctx.expanded ? "▾" : "▸") : ""].filter(Boolean).join(" ");
         const note = theme.fg(ctx.isError ? "error" : "dim", text);
-        const header = headerLines(`${pill(spec.name, theme)} ${spec.call(args, theme)}`, note, width, ctx.expanded, theme);
+        const header = headerLines(`${pill(spec.name, theme)} ${spec.call(args, theme, ctx)}`, note, width, ctx.expanded, theme);
         // One line of padding above and below the whole row; the body adds the bottom one when shown.
         return ["", ...header, ...(ctx.state.hasBody ? [] : [""])];
       }));
@@ -149,7 +153,13 @@ export function wrapBasicTool<Args>(pi: ExtensionAPI, orig: any, spec: RowSpec<A
   });
 }
 
+/** The raw command, or once explain.ts has one, a plain-English sentence with the command below it when open. */
 export const bashRow = row<{ command?: string }>({
   name: "bash",
-  call: args => highlightCode(args.command ?? "", "bash").join("\n"),
+  call: (args, _theme, ctx) => {
+    const command = highlightCode(args.command ?? "", "bash").join("\n");
+    const plain = ctx.state.plain;
+    if (!plain) return command;
+    return ctx.expanded ? `${plain}\n${command}` : plain;
+  },
 });

@@ -22,7 +22,7 @@ Some extensions began as other people's work; I link to their sources in the cod
 - **RTK Rewrite** (`rtk.ts`): Uses `rtk rewrite` to shorten some shell output.
 - **Security Guard** (`security/`): Checks risky commands and private files. Agents may read git and GitHub, but must ask before any write to them.
 - **Standalone Working** (`standalone-working.ts`): Shows working status above the input, not inside it.
-- **Tool Pills** (`tool-pills`): Shows tool calls on one line; click or press Ctrl+O to see output. Tool images show only in open rows when `terminal.showImages` is false.
+- **Tool Pills** (`tool-pills`): Shows tool calls on one line; click to expand details/images. Optional: bash rows swap the command for a plain-English sentence if you set a `explain.model` in settings.
 - **Web** (`web.ts`): Adds `web_search` and `web_fetch` through Jina. Search needs `JINA_API_KEY` in the environment or `~/.pi/.env`; fetch does not. Long pages go to `/tmp`.
 
 ## Skills

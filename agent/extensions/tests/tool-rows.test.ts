@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { advisorRow } from "../advisor/row.ts";
+import { explainLater, startExplaining } from "../tool-pills/explain.ts";
 import { bashRow, countNote, getText, row } from "../tool-pills/renderers.ts";
 import { pill } from "../tool-pills/pill.ts";
 import { diffNote } from "../tool-pills/diff-renderer.ts";
@@ -145,4 +150,45 @@ test("the advisor's own row copy draws the same lines as the shared row", () => 
     assert.deepEqual(drawWith(advisorRow), drawWith(shared), JSON.stringify({ expanded, isPartial, isError, result: result.content[0].text }));
   }
   assert.ok(pill("advisor", ansiTheme).includes("\x1b[38;2;47;95;159m advisor "), "same pill colour");
+});
+
+test("bash rows swap in a plain-English headline and keep the command when open", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-explain-test-"));
+  const before = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  t.after(async () => { if (before === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = before; await rm(dir, { recursive: true, force: true }); });
+  await writeFile(join(dir, "settings.json"), JSON.stringify({ explain: { model: "openrouter/cheap/model" } }));
+  const sent: string[] = [];
+  startExplaining({
+    ui: { notify() {} },
+    modelRegistry: {
+      find: (provider: string, id: string) => ({ provider, id }),
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }),
+      getProvider: () => ({ streamSimple: (_model: unknown, payload: any, options: any) => {
+        assert.deepEqual(options.samplingParams, { reasoning: { enabled: false } }, "thinking off");
+        sent.push(payload.messages.at(-1).content);
+        return { result: async () => ({ content: [{ type: "text", text: "Runs the tests\nand lists changed files." }], stopReason: "stop" }) };
+      } }),
+    },
+  } as any);
+  const unique = `${command} # ${Date.now()}`;
+
+  // A row rebuilt from a saved session never has its arguments marked complete.
+  const restored: any = { state: {}, args: { command: unique }, isPartial: true, invalidate() {} };
+  explainLater(unique, restored);
+  assert.equal(restored.state.asked, undefined);
+
+  let redrawn = false;
+  const live: any = { state: {}, args: { command: unique }, cwd: "/code/app", argsComplete: true, isPartial: true, expanded: false, isError: false, invalidate: () => { redrawn = true; } };
+  explainLater(unique, live);
+  explainLater(unique, live);
+  await setImmediate();
+  assert.deepEqual(sent, [`Working folder: /code/app\nCommand: ${unique}`], "asks once per row, with the folder");
+  assert.ok(redrawn);
+  const strip = (lines: string[]) => lines.map(l => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  assert.match(strip(bashRow.renderCall({ command: unique }, theme, live).render(80))[1], /^ +bash +Runs the tests and lists changed files\.$/);
+  live.expanded = true;
+  const open = strip(bashRow.renderCall({ command: unique }, theme, live).render(200));
+  assert.match(open[1], /Runs the tests and lists changed files\./);
+  assert.ok(open.some(l => l.includes("git status --short")), "raw command below the sentence");
 });

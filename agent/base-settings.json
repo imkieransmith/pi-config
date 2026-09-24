@@ -8,5 +8,8 @@
   "advisor": {
     "model": "openai-codex/gpt-6-astra",
     "effort": "high"
+  },
+  "explain": {
+    "model": "openrouter/openai/gpt-6-luna"
   }
 }
