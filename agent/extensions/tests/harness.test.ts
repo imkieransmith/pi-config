@@ -227,11 +227,11 @@ test("landing card separates nonempty sections and stays within terminal width",
   ];
   const where = "js13k-2026-2 - gpt-6-sol (high)";
   const card = renderCard(pi, theme, 60, where);
-  assert.deepEqual(card.slice(0, 4), ["π", "", `v${VERSION} - ${where}`, ""]);
-  assert.deepEqual(card.slice(4), [
+  assert.deepEqual(card.slice(0, 7), ["██████", "██  ██", "████  ██", "██    ██", "", `v${VERSION} - ${where}`, ""]);
+  assert.deepEqual(card.slice(7), [
     "commands", "  /evidence", "", "skills", "  write-plan", "", "tools", "  ask_user_question   read",
   ]);
-  assert.deepEqual(renderCard(pi, theme, 30, where).slice(2, 5), [`v${VERSION}`, truncateToWidth(where, 30), ""]);
+  assert.deepEqual(renderCard(pi, theme, 30, where).slice(5, 8), [`v${VERSION}`, truncateToWidth(where, 30), ""]);
   pi.getCommands = () => ["plan", "anthropic-auth:status", "advisor"].map((name) => ({ name, source: "extension", description: name, sourceInfo }));
   pi.getActiveTools = () => ["read", "bash", "edit", "write", "advisor", "ask_user_question"];
   const body = (width: number) => renderCard(pi, theme, width, where).slice(renderCard(pi, theme, width, where).indexOf("commands"));
@@ -243,7 +243,7 @@ test("landing card separates nonempty sections and stays within terminal width",
   ]);
   assert.equal(renderCard(pi, theme, 48, where).filter((line) => line.startsWith("  ")).length, 9);
   pi.getCommands = () => [];
-  assert.equal(renderCard(pi, theme, 8, where)[0], "π");
+  assert.equal(renderCard(pi, theme, 8, where)[0], "██████");
   assert.equal(renderCard(pi, theme, 60, where).filter((line) => line === "").length, 2);
   for (const width of [1, 8, 40, 100]) for (const line of renderCard(pi, theme, width, where)) assert.ok(visibleWidth(line) <= width);
 });

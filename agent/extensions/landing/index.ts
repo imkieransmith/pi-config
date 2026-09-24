@@ -20,6 +20,9 @@ const INDENT = 2, GAP = 3;
 /** Widest the card grows, when the terminal has room. */
 const MAX_CARD = 80;
 
+/** The logo's four-by-four shape, with two columns per square terminal block. */
+const LOGO = ["██████", "██  ██", "████  ██", "██    ██"];
+
 /**
  * Two columns shared by every section, so they line up. Each column is as wide
  * as the longest item; if two won't fit, the grid falls back to one.
@@ -61,9 +64,7 @@ export function renderCard(pi: ExtensionAPI, theme: Theme, width: number, where:
 		? [theme.fg("dim", `${version} - `) + theme.fg("muted", where)]
 		: [theme.fg("dim", version), theme.fg("muted", where)];
 	const lines = [
-		// A plain π styled bold italic by the terminal, so it comes from your own font.
-		// The ready-made bold italic 𝝿 is missing from most coding fonts.
-		theme.bold(theme.italic(theme.fg("accent", "π"))),
+		...LOGO.map((row) => theme.fg("accent", row)),
 		"",
 		...header,
 		"",

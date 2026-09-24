@@ -73,6 +73,19 @@ test("landing starts on each session, caches time slots and freezes on the last 
 	assert.equal(h.renders(), 2);
 });
 
+test("landing draws the four-row logo with clouds visible in its gaps", t => {
+	const h = setup(t);
+	h.start();
+	const frame = h.headers[0].render(144);
+	const plain = frame.map(stripTerminalSequences);
+	const y = plain.findIndex(line => line.includes("██████"));
+	assert.ok(y >= 0);
+	const x = plain[y].indexOf("██████");
+	const logo = plain.slice(y, y + 4).map(line => line.slice(x, x + 8));
+	assert.deepEqual(logo, ["██████▀▀", "██▀▀██▀▀", "████▀▀██", "██▀▀▀▀██"]);
+	assert.ok(!frame.slice(y, y + 4).some(line => line.includes("\x1b[3m")), "Keep the blocks upright");
+});
+
 test("frozen landing updates equal-width model/tool labels and theme changes", t => {
 	const h = setup(t);
 	h.start();
