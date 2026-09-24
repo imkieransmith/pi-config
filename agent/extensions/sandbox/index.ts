@@ -7,7 +7,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
-import { explainLater, startExplaining } from "../tool-pills/explain.ts";
+import { explainLater, startExplaining, stopExplaining } from "../tool-pills/explain.ts";
 import { bashRow } from "../tool-pills/renderers.ts";
 import { redact_value } from "../redact.ts";
 import { SANDBOX_NOTE, sandboxedBashOperations } from "./operations.ts";
@@ -16,8 +16,10 @@ import { clearRtkCache, rtkRewrite } from "./rtk.ts";
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     clearRtkCache();
-    startExplaining(ctx);
+    startExplaining(ctx, pi);
   });
+  pi.on("session_tree", (_event, ctx) => startExplaining(ctx, pi));
+  pi.on("session_shutdown", () => stopExplaining());
 
   const tool = createBashToolDefinition(process.cwd(), { operations: sandboxedBashOperations(process.cwd()) });
   pi.registerTool({

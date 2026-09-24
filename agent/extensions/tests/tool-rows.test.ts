@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { advisorRow } from "../advisor/row.ts";
-import { explainLater, startExplaining } from "../tool-pills/explain.ts";
+import { explainLater, startExplaining, stopExplaining } from "../tool-pills/explain.ts";
 import { bashRow, countNote, getText, row } from "../tool-pills/renderers.ts";
 import { pill } from "../tool-pills/pill.ts";
 import { diffNote } from "../tool-pills/diff-renderer.ts";
@@ -159,7 +159,11 @@ test("bash rows swap in a plain-English headline and keep the command when open"
   t.after(async () => { if (before === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = before; await rm(dir, { recursive: true, force: true }); });
   await writeFile(join(dir, "settings.json"), JSON.stringify({ explain: { model: "openrouter/cheap/model" } }));
   const sent: string[] = [];
-  startExplaining({
+  const entries: any[] = [];
+  const pi: any = { appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }) };
+  const branch = () => entries;
+  const session: any = {
+    sessionManager: { getBranch: branch },
     ui: { notify() {} },
     modelRegistry: {
       find: (provider: string, id: string) => ({ provider, id }),
@@ -170,25 +174,66 @@ test("bash rows swap in a plain-English headline and keep the command when open"
         return { result: async () => ({ content: [{ type: "text", text: "Runs the tests\nand lists changed files." }], stopReason: "stop" }) };
       } }),
     },
-  } as any);
+  };
+  startExplaining(session, pi);
+  t.after(stopExplaining);
   const unique = `${command} # ${Date.now()}`;
 
   // A row rebuilt from a saved session never has its arguments marked complete.
-  const restored: any = { state: {}, args: { command: unique }, isPartial: true, invalidate() {} };
+  const restored: any = { toolCallId: "old-call", state: {}, args: { command: unique }, isPartial: true, invalidate() {} };
   explainLater(unique, restored);
   assert.equal(restored.state.asked, undefined);
 
   let redrawn = false;
-  const live: any = { state: {}, args: { command: unique }, cwd: "/code/app", argsComplete: true, isPartial: true, expanded: false, isError: false, invalidate: () => { redrawn = true; } };
+  const live: any = { toolCallId: "call-1", state: {}, args: { command: unique }, cwd: "/code/app", argsComplete: true, isPartial: true, expanded: false, isError: false, invalidate: () => { redrawn = true; } };
   explainLater(unique, live);
   explainLater(unique, live);
   await setImmediate();
   assert.deepEqual(sent, [`Working folder: /code/app\nCommand: ${unique}`], "asks once per row, with the folder");
   assert.ok(redrawn);
+  assert.deepEqual(entries, [{ type: "custom", customType: "bash-explanation", data: { toolCallId: "call-1", sentence: "Runs the tests and lists changed files." } }]);
   const strip = (lines: string[]) => lines.map(l => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
   assert.match(strip(bashRow.renderCall({ command: unique }, theme, live).render(80))[1], /^ +bash +Runs the tests and lists changed files\.$/);
   live.expanded = true;
   const open = strip(bashRow.renderCall({ command: unique }, theme, live).render(200));
   assert.match(open[1], /Runs the tests and lists changed files\./);
   assert.ok(open.some(l => l.includes("git status --short")), "raw command below the sentence");
+
+  // Rebuild from saved entries as /reload or /resume does, without asking Luna.
+  startExplaining(session, pi);
+  const reopened: any = { ...restored, toolCallId: "call-1", state: {} };
+  explainLater(unique, reopened);
+  assert.equal(reopened.state.plain, "Runs the tests and lists changed files.");
+  assert.equal(sent.length, 1);
+  assert.equal(entries.length, 1);
+
+  // Repeated commands reuse the sentence but get their own saved tool-call ID.
+  const repeated: any = { ...live, toolCallId: "call-2", state: {} };
+  explainLater(unique, repeated);
+  await setImmediate();
+  assert.equal(sent.length, 2, "cache resets on session start");
+  assert.equal(entries.length, 2);
+  const again: any = { ...live, toolCallId: "call-3", state: {} };
+  explainLater(unique, again);
+  assert.equal(sent.length, 2);
+  assert.equal(entries.length, 3);
+
+  // Navigating to another branch drops explanations that aren't on its path.
+  session.sessionManager.getBranch = () => [];
+  startExplaining(session, pi);
+  const otherBranch: any = { ...restored, toolCallId: "call-1", state: {} };
+  explainLater(unique, otherBranch);
+  assert.equal(otherBranch.state.plain, undefined);
+
+  // A reply from the old branch cannot save into the new branch.
+  let resolveReply!: (reply: any) => void;
+  session.modelRegistry.getProvider = () => ({ streamSimple: () => ({ result: () => new Promise(resolve => { resolveReply = resolve; }) }) });
+  const pending: any = { ...live, toolCallId: "call-4", state: {} };
+  explainLater(unique, pending);
+  await setImmediate();
+  startExplaining(session, pi);
+  resolveReply({ content: [{ type: "text", text: "Stale sentence." }], stopReason: "stop" });
+  await setImmediate();
+  assert.equal(entries.length, 3);
+  assert.equal(pending.state.plain, undefined);
 });

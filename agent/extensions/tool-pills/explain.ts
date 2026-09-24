@@ -13,7 +13,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { normalizeContext, type Api, type Model } from "@earendil-works/pi-ai";
-import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { redact_text } from "../redact.ts";
 import type { RenderContext } from "./renderers.ts";
 
@@ -42,14 +42,45 @@ const TIMEOUT_MS = 15_000;
  */
 const REQUEST = { reasoning: { enabled: false } };
 
+const ENTRY_TYPE = "bash-explanation";
+type Explanation = { toolCallId: string; sentence: string };
+
 let session: ExtensionContext | undefined;
-/** Finished sentences by command, so a repeated command costs nothing. */
+let writer: ExtensionAPI | undefined;
+let generation = 0;
+/** Finished sentences by command, so a repeated command costs nothing during this session. */
 const sentences = new Map<string, string>();
+const byCall = new Map<string, string>();
 let warned = false;
 
-export function startExplaining(ctx: ExtensionContext): void {
+export function startExplaining(ctx: ExtensionContext, pi: ExtensionAPI): void {
+  generation++;
   session = ctx;
+  writer = pi;
   warned = false;
+  sentences.clear();
+  byCall.clear();
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
+    const data = entry.data as Partial<Explanation> | undefined;
+    if (typeof data?.toolCallId === "string" && typeof data.sentence === "string" && data.sentence) {
+      byCall.set(data.toolCallId, data.sentence);
+    }
+  }
+}
+
+export function stopExplaining(): void {
+  generation++;
+  session = undefined;
+  writer = undefined;
+  sentences.clear();
+  byCall.clear();
+}
+
+function save(toolCallId: string, sentence: string): void {
+  if (byCall.has(toolCallId)) return;
+  writer?.appendEntry(ENTRY_TYPE, { toolCallId, sentence } satisfies Explanation);
+  byCall.set(toolCallId, sentence);
 }
 
 /** Read on every use, so edits apply to the next command. */
@@ -79,31 +110,38 @@ async function ask(ctx: ExtensionContext, key: string, message: string): Promise
 }
 
 /**
- * Call from the bash row's renderCall. Asks once per row, and only for commands
- * run live: rows rebuilt from a saved session never have argsComplete or
- * executionStarted set, so reopening a session sends nothing.
+ * Call from the bash row's renderCall. Saved rows load by tool-call ID;
+ * only live rows ask the model. Reopening a session sends nothing.
  */
 export function explainLater(command: string | undefined, ctx: RenderContext): void {
-  if (!command || ctx.state.plain) return;
+  if (!command) return;
+  const stored = byCall.get(ctx.toolCallId);
+  if (stored) {
+    ctx.state.plain = stored;
+    return;
+  }
+  if (ctx.state.asked || !(ctx.argsComplete || ctx.executionStarted)) return;
   // The folder lets the model skip a `cd` into it. It's part of the cache key, since it changes the answer.
   const message = `Working folder: ${ctx.cwd}\nCommand: ${command}`;
   const known = sentences.get(message);
   if (known) {
+    save(ctx.toolCallId, known);
     ctx.state.plain = known;
     return;
   }
-  if (ctx.state.asked || !(ctx.argsComplete || ctx.executionStarted)) return;
   const key = modelKey();
   if (!session || !key) return;
   ctx.state.asked = true;
   const current = session;
+  const started = generation;
   ask(current, key, message).then(sentence => {
-    if (!sentence) return;
+    if (!sentence || started !== generation) return;
+    save(ctx.toolCallId, sentence);
     sentences.set(message, sentence);
     ctx.state.plain = sentence;
     ctx.invalidate();
   }, error => {
-    if (warned) return;
+    if (started !== generation || warned) return;
     warned = true;
     current.ui.notify(`Couldn't explain bash commands: ${error instanceof Error ? error.message : error}`, "warning");
   });
