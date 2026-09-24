@@ -21,7 +21,7 @@ import { assess_bash_command, assess_tool_call } from "../confirm-destructive.ts
 import { installSessionAllowReset, requestSessionConfirm } from "../shared/confirm-gate.ts";
 import { redact_text, redact_value } from "../redact.ts";
 import { registerDiffTools } from "../tool-pills/diff-renderer.ts";
-import { renderOverview } from "../resource-overview.ts";
+import { renderCard } from "../landing/index.ts";
 import metrics, { formatMetricsRow } from "../response-metrics.ts";
 import meep from "../meep.ts";
 import { paintLine, patchRender } from "../colour-messages/index.ts";
@@ -249,9 +249,9 @@ test("search filtering removes sensitive descendants and raw truncation details"
   }
 });
 
-test("overview reflects actual commands/tools and stays within terminal width", () => {
+test("landing card reflects actual commands/tools and stays within terminal width", () => {
   const { pi } = harness();
-  for (const width of [1, 8, 40, 100]) for (const line of renderOverview(pi, theme, width)) assert.ok(visibleWidth(line) <= width);
+  for (const width of [1, 8, 40, 100]) for (const line of renderCard(pi, theme, width, "~/.pi · model")) assert.ok(visibleWidth(line) <= width);
 });
 
 test("footer keeps statuses inline without empty rows and disposes its subscription", async () => {

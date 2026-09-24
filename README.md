@@ -19,10 +19,10 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Custom Footer** (`custom-footer`) — One line with path, context and model info. Advisor status stays hidden unless unavailable; warnings appear inline.
 - **Evidence Store** (`evidence.ts`) — Validated durable snippets with deduplication, paginated discovery, exact final-citation verification, and TUI-only proof.
 - **Herdr Agent State** (`herdr-agent-state.ts`) — Reports agent state to the herdr host. Installed and overwritten by herdr; don't edit it by hand.
+- **Landing Page** (`landing/`) — First screen: a soft watercolour haze in half blocks, three see-through washes glazed over each other, thickest at the screen edges and fading to bare paper round the middle. New each launch; each wash swells and fades in a wave that travels round the frame, at its own speed, until the first prompt. A clear card in the middle lists the actual commands, skills and active tools.
 - **Meep** (`meep.ts`) — Says meep when the model is done working.
 - **Plan Command** (`plan.ts`) — `/plan <request>` expands the write-plan skill. The skill handles captures; the command never force-closes them.
 - **Redact Sensitive Data** (`redact.ts`) — Redact secrets from tool output.
-- **Resource Overview** (`resource-overview.ts`) — Startup overview of actual available commands, skills and active tools.
 - **Response Metrics** (`response-metrics.ts`) — Persistent TUI-only elapsed time, tool count, input/output tokens and estimated main-model output tokens/sec. The rate includes request latency but excludes tools, user waits and advisor calls; it uses reported output tokens, not just visible text.
 - **RTK Rewrite** (`rtk.ts`) — Best-effort shell command optimization via `rtk rewrite`.
 - **Security Guard** (`security/`) — Confirms or blocks risky commands and sensitive file access. Agents may read git/GitHub state freely but must ask before any command that changes it (commit, push, pull, reset, stash, `gh pr create`, `npm version`...).
