@@ -103,6 +103,7 @@ function drawTool(tool: any, args: any, result: any, expanded = false) {
 
 test("our own tools render as compact rows that expand to the full detail", () => {
   const tools = ownTools();
+  assert.deepEqual(Object.keys(tools).sort(), ["ask_user_question", "context_snapshot", "evidence_add", "evidence_get", "evidence_list", "evidence_verify"].sort());
   const text = (t: string, details: any = {}) => ({ content: [{ type: "text", text: t }], details });
 
   const question = { question: "Which tools do you want to see?", header: "Demo", options: [], multiSelect: false };
@@ -112,13 +113,13 @@ test("our own tools render as compact rows that expand to the full detail", () =
 
 
   const add = { note: "Jina search needs a key", source: "https://jina.ai", snippet: "blocked without key" };
-  assert.match(drawTool(tools.EvidenceAdd, add, text("stored e123abc: x", { id: "e123abc", duplicate: false }))[0], /evidence +add Jina search needs a key +e123abc ▸$/);
-  assert.deepEqual(drawTool(tools.EvidenceAdd, add, text("", { id: "e123abc" }), true).slice(1).map(l => l.trim()), ["https://jina.ai", "blocked without key"]);
-  assert.match(drawTool(tools.EvidenceList, { limit: 2 }, text("", { count: 2, total: 5 }))[0], /evidence +list +2 of 5 entries ▸$/);
+  assert.match(drawTool(tools.evidence_add, add, text("stored e123abc: x", { id: "e123abc", duplicate: false }))[0], /evidence +add Jina search needs a key +e123abc ▸$/);
+  assert.deepEqual(drawTool(tools.evidence_add, add, text("", { id: "e123abc" }), true).slice(1).map(l => l.trim()), ["https://jina.ai", "blocked without key"]);
+  assert.match(drawTool(tools.evidence_list, { limit: 2 }, text("", { count: 2, total: 5 }))[0], /evidence +list +2 of 5 entries ▸$/);
 
   const finish = text("finished capture c1; saved durable summary s9f8e7d6\n\nGoal: tidy rows");
-  assert.match(drawTool(tools.ContextSnapshot, { action: "finish", summary: "Goal: tidy rows\nMore" }, finish)[0], /snapshot +finish Goal: tidy rows … +s9f8e7d6 ▸$/);
-  assert.match(drawTool(tools.ContextSnapshot, { action: "start", label: "Rows" }, text("started capture cf6c774: Rows"))[0], /snapshot +start Rows +cf6c774 ▸$/);
+  assert.match(drawTool(tools.context_snapshot, { action: "finish", summary: "Goal: tidy rows\nMore" }, finish)[0], /snapshot +finish Goal: tidy rows … +s9f8e7d6 ▸$/);
+  assert.match(drawTool(tools.context_snapshot, { action: "start", label: "Rows" }, text("started capture cf6c774: Rows"))[0], /snapshot +start Rows +cf6c774 ▸$/);
 });
 
 test("the advisor's own row copy draws the same lines as the shared row", () => {

@@ -2,10 +2,10 @@
  * Allow the model to store and fetch evidence snippets to use as citations in answers.
  *
  * Agent tools:
- * EvidenceAdd - validate and store an exact snippet with source + one-line note.
- * EvidenceGet - retrieve a single entry by ID.
- * EvidenceVerify - retrieve full snippets for every final citation.
- * EvidenceList - discover entries in bounded newest-first cursor pages.
+ * evidence_add - validate and store an exact snippet with source + one-line note.
+ * evidence_get - retrieve a single entry by ID.
+ * evidence_verify - retrieve full snippets for every final citation.
+ * evidence_list - discover entries in bounded newest-first cursor pages.
  *
  * Original - https://github.com/itayinbarr/little-coder/tree/main/.pi/extensions/evidence
  */
@@ -245,8 +245,8 @@ export default function (pi: ExtensionAPI) {
   // ── Tools ─────────────────────────────────────────────────────────────────
 
   pi.registerTool({
-    name: "EvidenceAdd",
-    label: "EvidenceAdd",
+    name: "evidence_add",
+    label: "evidence_add",
     description:
       "Save an exact evidence snippet with its source and a one-line claim note. " +
       `Snippets above ${SNIPPET_CAP} characters are rejected rather than altered.`,
@@ -306,11 +306,11 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "EvidenceGet",
-    label: "EvidenceGet",
+    name: "evidence_get",
+    label: "evidence_get",
     description: "Retrieve a previously-saved evidence entry by its ID.",
     parameters: Type.Object({
-      id: Type.String({ description: "Evidence ID returned by EvidenceAdd or EvidenceList" }),
+      id: Type.String({ description: "Evidence ID returned by evidence_add or evidence_list" }),
     }),
     async execute(_toolCallId, { id }, _signal, _onUpdate, ctx) {
       const eid = normalizeEvidenceId(id);
@@ -335,8 +335,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "EvidenceVerify",
-    label: "EvidenceVerify",
+    name: "evidence_verify",
+    label: "evidence_verify",
     description:
       "Retrieve the full source, note, and exact snippet for every evidence ID cited in a final answer. " +
       "Fails if any ID is missing so claim support can be checked before responding.",
@@ -368,8 +368,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "EvidenceList",
-    label: "EvidenceList",
+    name: "evidence_list",
+    label: "evidence_list",
     description:
       `List evidence newest-first in cursor pages (default ${DEFAULT_LIST_LIMIT}, maximum ${MAX_LIST_LIMIT}). ` +
       "Use nextBeforeId as beforeId to retrieve the next older page.",

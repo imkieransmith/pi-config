@@ -25,7 +25,7 @@ Normally skip it for routine follow-ups, tweaks, small additions, straightforwar
 
 ## Context Preservation
 
-Start a `ContextSnapshot` before substantial investigation. Finish an active capture first only when it represents different work; reuse it for the same body of work and minor follow-ups.
+Start a `context_snapshot` before substantial investigation. Finish an active capture first only when it represents different work; reuse it for the same body of work and minor follow-ups.
 
 At completion, finish the capture with a durable summary containing:
 
@@ -120,7 +120,7 @@ Run targeted checks at useful points. Never silently weaken or skip a planned ch
 1. Run the appropriate full-project checks recorded in the plan.
 2. Fix ordinary regressions within the approved outcome; seek approval only for materially broader fixes.
 3. Update `TODO.md` to reflect completed work and unresolved items.
-4. Finish `ContextSnapshot` using the durable-summary requirements above.
+4. Finish `context_snapshot` using the durable-summary requirements above.
 5. Report the outcome, verification results, and remaining risks or blockers concisely.
 
 Do not claim completion when required verification is failing or was not run. Distinguish code failures from infrastructure or environment limitations.

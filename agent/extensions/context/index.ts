@@ -8,7 +8,7 @@
  * /context start [label] - Start a capture before substantial work. Only one capture can be active.
  * /context discard - Close the active capture without saving a durable summary.
  *
- * Agent tool equivalent: ContextSnapshot can start, finish, discard, inspect status, and list summaries.
+ * Agent tool equivalent: context_snapshot can start, finish, discard, inspect status, and list summaries.
  *
  * Inspired by - https://swival.dev/pages/context-management.html
  */
@@ -446,7 +446,7 @@ function formatCommandHelp(): string {
     "",
     "Pi's built-in /compact command and automatic compaction append recent durable summaries.",
     "",
-    "Agent tool equivalent: ContextSnapshot can start, finish, discard, inspect status, and list summaries.",
+    "Agent tool equivalent: context_snapshot can start, finish, discard, inspect status, and list summaries.",
   ].join("\n");
 }
 
@@ -606,24 +606,24 @@ export default function (pi: ExtensionAPI) {
   // Tool
 
   pi.registerTool({
-    name: "ContextSnapshot",
-    label: "ContextSnapshot",
+    name: "context_snapshot",
+    label: "context_snapshot",
     description:
       "Bracket substantial work in a durable context capture. " +
       "Call start before the work, then finish with a structured continuation summary; use discard if nothing should be preserved. " +
       "Finished summaries remain in session state, and a recent bounded set is appended only when Pi compacts. " +
-      "ContextSnapshot never rolls back files or conversation state and never requests compaction.",
+      "context_snapshot never rolls back files or conversation state and never requests compaction.",
     promptSnippet:
-      "ContextSnapshot starts and finishes durable work captures; summaries remain on disk and recent summaries return in Pi's next compaction result.",
+      "context_snapshot starts and finishes durable work captures; summaries remain on disk and recent summaries return in Pi's next compaction result.",
     promptGuidelines: [
-      "Use ContextSnapshot start before a broad search, debugging session, design investigation, or any work likely to create throwaway context.",
-      "Use ContextSnapshot finish when the capture is complete or before switching tasks. Finish closes the capture and saves durable context; it does not roll anything back.",
+      "Use context_snapshot start before a broad search, debugging session, design investigation, or any work likely to create throwaway context.",
+      "Use context_snapshot finish when the capture is complete or before switching tasks. Finish closes the capture and saves durable context; it does not roll anything back.",
       "A good finish summary should cover: (1) the goal or question being investigated, (2) key facts discovered and decisions made, (3) files touched or inspected and why, and (4) outstanding questions, risks, or next steps.",
       "Keep durable summaries concise but specific. Preserve exact file paths, command names, API names, error messages, and user constraints when they matter.",
       "Finishing stores the summary without reinjecting it on ordinary turns; recent summaries are appended when Pi next compacts.",
       "If changes were observed after start, finish may require force: true. Only force after the summary accounts for those changes.",
-      "Use ContextSnapshot discard only when the active capture should close without a durable summary.",
-      "ContextSnapshot must not trigger or request compaction; compaction is controlled by the user or Pi.",
+      "Use context_snapshot discard only when the active capture should close without a durable summary.",
+      "context_snapshot must not trigger or request compaction; compaction is controlled by the user or Pi.",
     ],
     executionMode: "sequential",
     parameters: Type.Object({
