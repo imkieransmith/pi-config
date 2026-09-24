@@ -1,8 +1,12 @@
 /**
  * Advisor — consult one fixed reviewer model for one recommended next move.
  *
- * The tool requires a short brief and always uses openai-codex/gpt-6-astra with
- * one static usage contract and no active-model-dependent policy.
+ * The tool requires a short brief and uses the model set in settings.json with
+ * one static usage contract and no active-model-dependent policy:
+ *
+ *   "advisor": { "model": "openai-codex/gpt-6-astra", "effort": "high" }
+ *
+ * effort is optional; without it the model uses its own default.
  *
  * /advisor status   - show the configured reviewer and call counts.
  * /advisor debug    - show bounded status/error diagnostics (no payload samples).
@@ -11,32 +15,44 @@
  * Advisor original - https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-advisor
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ADVISOR_BRIEF_MAX_CHARS, normalizeAdvisorBrief } from "./brief.ts";
 import { advisorRow } from "./row.ts";
 import { ADVISOR_TOOL_NAME, debugLogPath, engineStats, modelKey, resetEngineState, runAdvisor } from "./engine.ts";
 
-const ADVISOR_PROVIDER = "openai-codex";
-const ADVISOR_MODEL_ID = "gpt-6-astra";
-const DEFAULT_EFFORT: ThinkingLevel = "high";
+interface AdvisorSettings {
+	/** "provider/model-id", split at the first slash. */
+	model?: string;
+	effort?: ThinkingLevel;
+}
 
 interface ResolvedAdvisor {
 	model?: Model<Api>;
 	effort?: ThinkingLevel;
 }
 
+/** Read on every use, so edits apply from the next prompt. */
+function advisorSettings(): AdvisorSettings {
+	try {
+		return JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf8")).advisor ?? {};
+	} catch {
+		return {};
+	}
+}
+
 function resolveAdvisor(ctx: ExtensionContext): ResolvedAdvisor {
-	const model = ctx.modelRegistry.find(ADVISOR_PROVIDER, ADVISOR_MODEL_ID) as Model<Api> | undefined;
-	return {
-		model,
-		effort: model?.reasoning ? DEFAULT_EFFORT : undefined,
-	};
+	const { model: key = "", effort } = advisorSettings();
+	const slash = key.indexOf("/");
+	const model = slash > 0 ? (ctx.modelRegistry.find(key.slice(0, slash), key.slice(slash + 1)) as Model<Api> | undefined) : undefined;
+	return { model, effort: model?.reasoning ? effort : undefined };
 }
 
 function configuredAdvisorKey(): string {
-	return `${ADVISOR_PROVIDER}/${ADVISOR_MODEL_ID}`;
+	return advisorSettings().model ?? "(not set: add advisor.model to settings.json)";
 }
 
 function ensureActive(pi: ExtensionAPI): void {
@@ -66,7 +82,7 @@ function statusText(pi: ExtensionAPI, ctx: ExtensionContext): string {
 		"advisor status",
 		`configured advisor: ${configuredAdvisorKey()}`,
 		`resolved: ${r.model ? modelKey(r.model) : "(model unavailable)"}`,
-		`effort: ${r.effort ?? "model default (non-reasoning)"}`,
+		`effort: ${r.effort ?? "model default"}`,
 		`tool active: ${isActive(pi)}`,
 		`calls this session: ${stats.attemptedCalls} attempted, ${stats.successfulCalls} successful`,
 		`debug log: ${debugLogPath()}`,
@@ -129,7 +145,7 @@ function registerAdvisorTool(pi: ExtensionAPI): void {
 
 function registerAdvisorCommand(pi: ExtensionAPI): void {
 	pi.registerCommand("advisor", {
-		description: "Show fixed advisor status or debug information",
+		description: "Show advisor status or debug information",
 		getArgumentCompletions: (prefix: string) => {
 			const trimmed = (prefix ?? "").trim().toLowerCase();
 			return ["status", "debug"]

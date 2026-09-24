@@ -13,5 +13,9 @@
   "tuiMode": "fullscreen",
   "terminal": {
     "showImages": false
+  },
+  "advisor": {
+    "model": "openai-codex/gpt-6-astra",
+    "effort": "high"
   }
 }

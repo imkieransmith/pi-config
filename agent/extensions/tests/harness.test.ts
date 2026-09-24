@@ -288,7 +288,12 @@ test("footer keeps statuses inline without empty rows and disposes its subscript
   footer.dispose(); assert.equal(disposed, true);
 });
 
-test("advisor clears its normal footer status and only warns when unavailable", async () => {
+test("advisor clears its normal footer status and only warns when unavailable", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-advisor-settings-"));
+  const before = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  t.after(async () => { if (before === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = before; await rm(dir, { recursive: true, force: true }); });
+  await writeFile(join(dir, "settings.json"), JSON.stringify({ advisor: { model: "openai-codex/gpt-6-astra", effort: "high" } }));
   const { pi, hooks } = harness(); advisor(pi);
   let available = true;
   const statuses = new Map<string, string | undefined>();
@@ -308,6 +313,9 @@ test("advisor clears its normal footer status and only warns when unavailable", 
   available = true;
   await hooks.get("before_agent_start")![0]({}, ctx);
   assert.equal(statuses.get("advisor"), undefined);
+  await writeFile(join(dir, "settings.json"), JSON.stringify({}));
+  await hooks.get("before_agent_start")![0]({}, ctx);
+  assert.equal(statuses.get("advisor"), "advisor unavailable", "no advisor.model means no advisor");
 });
 
 test("native write queue supplies the actual baseline for concurrent diff previews", async t => {

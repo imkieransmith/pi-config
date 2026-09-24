@@ -30,6 +30,7 @@ test('offline Pi loads all extensions, runs protected tools, reloads and resets 
   assert.equal(spawnSync('git', ['-C', workspace, 'add', '--', 'tracked.txt'], { env: gitEnv }).status, 0);
   await writeFile(join(workspace, 'package.json'), JSON.stringify({ scripts: { test: 'exit 7' } }));
   const agent = join(workspace, 'agent'); await mkdir(agent);
+  await writeFile(join(agent, 'settings.json'), JSON.stringify({ advisor: { model: 'openai-codex/gpt-6-astra', effort: 'high' } }));
   const extensions = [];
   for (const entry of await readdir(join(repo, 'agent/extensions'), { withFileTypes: true })) {
     if (entry.isFile() && entry.name.endsWith('.ts')) extensions.push(join(repo, 'agent/extensions', entry.name));
