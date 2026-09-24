@@ -435,14 +435,27 @@ test("rate rendering rejects invalid measurements and keeps a single bounded row
     const component = renderEntry({ data: { ...data, modelTokensPerSecond: rate } }, {}, theme);
     for (const width of [1, 40, 120]) {
       const lines = component.render(width);
-      assert.equal(lines.length, 1);
+      assert.deepEqual(lines.slice(1), [""], "one row, then padding");
       assert.ok(visibleWidth(lines[0]) <= width);
     }
-    const row = component.render(120)[0];
+    const row = component.render(120)[0].trimStart();
     if (rate === undefined) assert.ok(!row.includes("tok/s"));
     else if (rate === 50) assert.ok(row.endsWith(" │ ~50 tok/s"));
     else assert.equal(row, "Response metrics unavailable");
   }
+});
+
+test("response metrics join the final response: its colour and no blank line between", () => {
+  const { pi } = harness(); let renderEntry: Function = () => {};
+  pi.registerEntryRenderer = (_type, renderer) => { renderEntry = renderer; };
+  metrics(pi);
+  // Pi's entry component: a blank line, then the renderer's lines.
+  const host: any = { render(width: number) { return ["", ...this.child.render(width)]; } };
+  host.child = renderEntry.call(host, { data: { elapsedMs: 1000, toolCalls: 1, inputTokens: 100, outputTokens: 50 } }, {}, theme);
+  renderEntry.call(host, { data: {} }, {}, theme); // Rebuilds must not wrap twice.
+  const lines = host.render(40);
+  assert.equal(lines.length, 2);
+  assert.ok(lines.every((line: string) => line.startsWith("\x1b[48;2;231;240;255m")));
 });
 
 test("sounds use prompt/settled events and remain quiet outside TUI", async () => {

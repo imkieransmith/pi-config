@@ -64,6 +64,26 @@ function paintLines(lines: string[], width: number, bgAnsi: string, swap?: strin
 	return lines.map((line) => paintLine(line, width, bgAnsi, swap));
 }
 
+const FOOTER = Symbol.for("pi-extension:colour-messages:footer");
+
+/**
+ * Makes a custom entry read as the bottom of the final response above it: same
+ * background, and no blank line between them. `host` is Pi's entry component,
+ * which is `this` inside an entry renderer. Pi puts a blank line above every
+ * entry; the final response already ends with one.
+ */
+export function joinFinalResponse(host: unknown): void {
+	const component = host as ({ render?: (width: number) => string[] } & Record<PropertyKey, unknown>) | undefined;
+	if (!component?.render || component[FOOTER]) return;
+	const original = component.render;
+	const bgAnsi = hexToBgAnsi(ASSISTANT_COLOUR);
+	component[FOOTER] = true;
+	component.render = function (this: unknown, width: number): string[] {
+		const lines = original.call(this, width);
+		return paintLines(lines[0] === "" ? lines.slice(1) : lines, width, bgAnsi);
+	};
+}
+
 export function patchRender(
 	prototype: RenderablePrototype & Record<PropertyKey, unknown>,
 	modeForInstance: PaintMode | ((instance: any) => PaintMode),

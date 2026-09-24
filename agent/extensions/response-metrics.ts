@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { joinFinalResponse } from "./colour-messages/index.ts";
 
 const ENTRY_TYPE = "response-metrics";
 
@@ -83,14 +84,17 @@ function isMetricsData(value: unknown): value is ResponseMetricsData {
 export default function (pi: ExtensionAPI) {
   let activeRun: ActiveRun | undefined;
 
-  pi.registerEntryRenderer(ENTRY_TYPE, (entry, _options, theme) => {
+  // A plain function: Pi calls it as a method of the entry component, which joinFinalResponse restyles.
+  pi.registerEntryRenderer(ENTRY_TYPE, function (this: unknown, entry, _options, theme) {
     const metrics = isMetricsData(entry.data) ? entry.data : undefined;
     const row = metrics ? formatMetricsRow(metrics) : "Response metrics unavailable";
+    joinFinalResponse(this);
 
     return {
       invalidate() {},
       render(width: number): string[] {
-        return [truncateToWidth(theme.fg("dim", row), Math.max(0, width))];
+        // Indent to line up with the response text, then pad below like the response does.
+        return [` ${truncateToWidth(theme.fg("dim", row), Math.max(0, width - 2))}`, ""];
       },
     };
   });
