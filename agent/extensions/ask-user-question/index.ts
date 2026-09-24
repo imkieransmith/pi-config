@@ -4,7 +4,7 @@
  * Original - https://github.com/tomsej/pi-ext/tree/main/extensions/ask-user-question
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Box, TruncatedText } from "@earendil-works/pi-tui";
+import { countNote, getText, row } from "../tool-pills/renderers.ts";
 import { AskUserQuestionComponent } from "./component.ts";
 import { InputSchema, type Question, type Result } from "./schema.ts";
 
@@ -80,44 +80,25 @@ Always use this tool instead of asking questions in plain text — it provides a
       };
     },
 
-    renderCall(args, theme, _ctx) {
-      const questions = (args.questions ?? []) as Question[];
-      const topics = questions.map((q) => q.header).join(", ");
-      return new TruncatedText(
-        theme.fg("toolTitle", theme.bold("ask user ")) +
-          theme.fg("muted", topics),
-        0,
-        0,
-      );
-    },
-
-    renderResult(result, _options, theme, _ctx) {
-      const details = result.details as Result | undefined;
-
-      if (!details) {
-        const t = result.content[0];
-        return new TruncatedText(t?.type === "text" ? t.text : "", 0, 0);
-      }
-
-      if (details.cancelled) {
-        return new TruncatedText(theme.fg("warning", "Cancelled"), 0, 0);
-      }
-
-      // One TruncatedText per question — each line item truncated independently
-      const box = new Box(0, 0);
-      for (const q of details.questions) {
-        const answer = details.answers[q.question] ?? "(no answer)";
-        box.addChild(
-          new TruncatedText(
-            theme.fg("success", "✓ ") +
-              theme.fg("accent", `${q.header}: `) +
-              theme.fg("text", answer),
-            0,
-            0,
-          ),
-        );
-      }
-      return box;
-    },
+    ...row<{ questions?: Question[] }>({
+      name: "ask user",
+      // One question shows in full; several show their short headers.
+      call: ({ questions = [] }) => questions.length === 1
+        ? questions[0].question
+        : `${questions.length} questions: ${questions.map(q => q.header).join(", ")}`,
+      note: result => {
+        const details = result.details as Result | undefined;
+        if (!details || details.cancelled) return "cancelled";
+        return countNote(Object.keys(details.answers).length, "answer");
+      },
+      body: (result, theme) => {
+        const details = result.details as Result | undefined;
+        if (!details || details.cancelled) return theme.fg("warning", getText(result) || "Cancelled");
+        return details.questions.map(q => [
+          theme.fg("accent", `${q.header}: `) + q.question,
+          theme.fg("success", "✓ ") + (details.answers[q.question] ?? theme.fg("dim", "(no answer)")),
+        ].join("\n")).join("\n\n");
+      },
+    }),
   });
 }

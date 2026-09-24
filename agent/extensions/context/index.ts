@@ -22,6 +22,7 @@ import type {
   ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import { compact as runCompaction } from "@earendil-works/pi-coding-agent";
+import { getText, row } from "../tool-pills/renderers.ts";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { randomBytes } from "node:crypto";
@@ -684,5 +685,11 @@ export default function (pi: ExtensionAPI) {
 
       throw new Error(`unknown action '${String(action)}'`);
     },
+    ...row<{ action?: string; label?: string; summary?: string }>({
+      name: "snapshot",
+      // Finish shows the summary's opening words; expanding shows the whole saved summary.
+      call: ({ action = "", label, summary }, theme) => `${theme.fg("dim", action)} ${label ?? summary ?? ""}`.trimEnd(),
+      note: (result) => getText(result).match(/\b(?:started|discarded) capture (\w+)|saved durable summary (\w+)/)?.slice(1).find(Boolean) ?? "",
+    }),
   });
 }

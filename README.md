@@ -28,7 +28,7 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 - **Security Guard** (`security/`) — Confirms or blocks risky commands and sensitive file access. Agents may read git/GitHub state freely but must ask before any command that changes it (commit, push, pull, reset, stash, `gh pr create`, `npm version`...).
 - **Standalone Working** (`standalone-working.ts`) - Keeps the working status on its own row above the input, using Pi's native editor without an embedded border indicator.
 - **Superset Hooks** (`superset-hooks.ts`) — Emit Superset lifecycle hooks so the host shows a working indicator.
-- **Tool Pills** (`tool-pills`) — One-line tool rows (pill, command, short note such as `3 lines` or `+2 −1`) with output hidden until you click the row in fullscreen mode or press Ctrl+O. Covers bash, read, ls, find, grep, edit, write and the web tools.
+- **Tool Pills** (`tool-pills`) — One-line tool rows (pill, command, short note such as `3 lines` or `+2 −1`) with output hidden until you click the row in fullscreen mode or press Ctrl+O. Covers bash, read, ls, find, grep, edit, write, the web tools, advisor, ask user, evidence and snapshot. Our own tools get a deep blue pill; the advisor keeps its own copy of the row so its folder stays self-contained.
 - **Web** (`web.ts`) — `web_search` and `web_fetch` tools via Jina. Search needs `JINA_API_KEY` in the environment or `~/.pi/.env`; fetch works without it. Long pages show the first 20KB and save the full text under `/tmp`.
 
 ### Skills

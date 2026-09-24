@@ -15,6 +15,7 @@ import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ADVISOR_BRIEF_MAX_CHARS, normalizeAdvisorBrief } from "./brief.ts";
+import { advisorRow } from "./row.ts";
 import { ADVISOR_TOOL_NAME, debugLogPath, engineStats, modelKey, resetEngineState, runAdvisor } from "./engine.ts";
 
 const ADVISOR_PROVIDER = "openai-codex";
@@ -122,6 +123,7 @@ function registerAdvisorTool(pi: ExtensionAPI): void {
 			});
 			return result;
 		},
+		...advisorRow,
 	});
 }
 

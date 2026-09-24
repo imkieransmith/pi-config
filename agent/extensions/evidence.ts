@@ -18,6 +18,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Box, Text } from "@earendil-works/pi-tui";
+import { countNote, row } from "./tool-pills/renderers.ts";
 import { randomBytes } from "node:crypto";
 import {
   DEFAULT_LIST_LIMIT,
@@ -292,6 +293,16 @@ export default function (pi: ExtensionAPI) {
         details: { id: entry.id, duplicate: false },
       };
     },
+    ...row<{ note?: string; source?: string; snippet?: string }>({
+      name: "evidence",
+      call: ({ note }, theme) => `${theme.fg("dim", "add")} ${note ?? ""}`,
+      note: result => {
+        const { id, duplicate } = (result.details ?? {}) as { id?: string; duplicate?: boolean };
+        return duplicate ? `existing ${id}` : id ?? "";
+      },
+      body: (_result, theme, { source, snippet }) =>
+        `${theme.fg("mdLink", source ?? "")}\n\n${theme.fg("toolOutput", snippet ?? "")}`,
+    }),
   });
 
   pi.registerTool({
@@ -316,6 +327,11 @@ export default function (pi: ExtensionAPI) {
         details: {},
       };
     },
+    ...row<{ id?: string }>({
+      name: "evidence",
+      call: ({ id }, theme) => `${theme.fg("dim", "get")} ${id ?? ""}`,
+      note: () => "",
+    }),
   });
 
   pi.registerTool({
@@ -344,6 +360,11 @@ export default function (pi: ExtensionAPI) {
         details: { ids: entries.map((entry) => entry.id), count: entries.length },
       };
     },
+    ...row<{ ids?: string[] }>({
+      name: "evidence",
+      call: ({ ids = [] }, theme) => `${theme.fg("dim", "verify")} ${ids.join(", ")}`,
+      note: result => countNote((result.details as { count?: number } | undefined)?.count ?? 0, "entry", "entries"),
+    }),
   });
 
   pi.registerTool({
@@ -374,5 +395,13 @@ export default function (pi: ExtensionAPI) {
         },
       };
     },
+    ...row<{ limit?: number; beforeId?: string }>({
+      name: "evidence",
+      call: ({ beforeId }, theme) => `${theme.fg("dim", "list")}${beforeId ? ` before ${beforeId}` : ""}`,
+      note: result => {
+        const { count = 0, total = 0 } = (result.details ?? {}) as { count?: number; total?: number };
+        return `${count} of ${countNote(total, "entry", "entries")}`;
+      },
+    }),
   });
 }

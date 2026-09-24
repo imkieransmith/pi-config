@@ -8,7 +8,7 @@ import { redact_text, redact_value } from "./redact.ts";
 const extensionDir = dirname(fileURLToPath(import.meta.url));
 
 test("advisor runtime imports stay inside its directory package", async () => {
-	for (const name of ["index.ts", "engine.ts", "brief.ts", "redact.ts"]) {
+	for (const name of ["index.ts", "engine.ts", "brief.ts", "redact.ts", "row.ts"]) {
 		const source = await readFile(resolve(extensionDir, name), "utf8");
 		for (const match of source.matchAll(/\bfrom\s+["'](\.[^"']+)["']/g)) {
 			const target = resolve(extensionDir, dirname(name), match[1]);
