@@ -22,5 +22,7 @@ APPEND_SYSTEM.md
 agent/trust.json
 agent/models.json
 agent/models-store.json
+# Local Pi settings; shared keys live in agent/base-settings.json (npm run setup)
+agent/settings.json
 # advisor debug output
 agent/advisor/

@@ -35,11 +35,21 @@ This repo is a personal Pi setup: agent-facing extensions, skills, and UI helper
 Skills live under `agent/skills/` and provide task-specific instructions that agents load on demand, such as evidence capture and structured planning.
 
 ## Install
+If you use a checkout of this repo as your Pi config, run this from the repo root before starting Pi:
+
+```bash
+npm run setup
+```
+
+This copies any missing keys from `agent/base-settings.json` into your local `agent/settings.json` without changing values you already set. The base covers the light theme, fullscreen mode, quiet startup, tool images and the advisor model.
+
+You can also install the extensions directly:
+
 ```bash
 pi install git:github.com/imkieransmith/pi-config
 ```
 
-You can install it directly like this, but I'd recommend copying the parts you want into your own config and building on top of them instead. That’s how this repo evolved in the first place, and it makes it much easier to fully understand, customise, and maintain your own setup long term.
+The setup command writes to the checkout's `agent/settings.json`, not to your settings after a direct install. For a direct install, copy the needed values from `agent/base-settings.json` into your own settings by hand. I'd recommend copying the parts you want into your own config and building on top of them instead. That’s how this repo evolved in the first place, and it makes it much easier to fully understand, customise, and maintain your own setup long term.
 
 ## License
 MIT. Attribution for code that originally came from other Pi users is linked in the relevant source files where applicable.

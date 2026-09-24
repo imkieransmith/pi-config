@@ -11,7 +11,8 @@
     "test:security": "node --test agent/extensions/security/policy.test.ts",
     "test": "node --import ./agent/extensions/tests/register.mjs --test \"agent/extensions/**/*.test.ts\"",
     "test:integration": "node --import ./agent/extensions/tests/register.mjs --test agent/extensions/tests/integration.test.mjs",
-    "typecheck": "node agent/extensions/tests/typecheck.mjs"
+    "typecheck": "node agent/extensions/tests/typecheck.mjs",
+    "setup": "node agent/setup.ts"
   },
   "pi": {
     "extensions": [
