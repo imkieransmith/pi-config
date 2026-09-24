@@ -5,14 +5,17 @@
  * a single row on left click; Ctrl+O toggles every row.
  */
 import type { AgentToolResult, ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { highlightCode } from "@earendil-works/pi-coding-agent";
-import { Box, type Component, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { convertToPng, highlightCode } from "@earendil-works/pi-coding-agent";
+import { Box, type Component, Container, getCapabilities, Image, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { redact_value } from "../redact.ts";
 import { pill } from "./pill.ts";
 
 type Result = AgentToolResult<any>;
 /** Pi passes this to renderers; the package doesn't export its type. `state` is shared by one row's call and result. */
-type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2] & { state: { note?: string; hasBody?: boolean } };
+type Png = { data: string; mimeType: string };
+type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2] & {
+  state: { note?: string; hasBody?: boolean; png?: Record<number, Png | "pending" | "failed"> };
+};
 
 export type RowSpec<Args = any> = {
   name: string;
@@ -60,6 +63,36 @@ function tinted(ctx: RenderContext, theme: Theme, ...children: Component[]): Box
   return box;
 }
 
+/**
+ * The result's images, drawn only in an open row. Pi's own image drawing is off
+ * (terminal.showImages: false in settings.json), or it would show them below every row.
+ */
+function images(result: Result, theme: Theme, ctx: RenderContext): Component[] {
+  const caps = getCapabilities();
+  if (!caps.images) return [];
+  return result.content.flatMap((block, i) => {
+    if (block.type !== "image") return [];
+    let image: Png = block;
+    // The kitty protocol (Ghostty, kitty) only takes PNG: convert once, then redraw.
+    if (caps.images === "kitty" && block.mimeType !== "image/png") {
+      const png = (ctx.state.png ??= {});
+      if (!png[i]) {
+        png[i] = "pending";
+        void convertToPng(block.data, block.mimeType).then(out => {
+          png[i] = out ?? "failed";
+          ctx.invalidate();
+        });
+      }
+      const done = png[i];
+      if (typeof done === "string") return [];
+      image = done;
+    }
+    const picture = new Image(image.data, image.mimeType, { fallbackColor: s => theme.fg("toolOutput", s) }, { maxWidthCells: 60 });
+    // Indent one column to line up with the row's text.
+    return [new Spacer(1), lines(width => picture.render(width - 1).map(line => ` ${line}`))];
+  });
+}
+
 function headerLines(head: string, note: string, width: number, expanded: boolean, theme: Theme): string[] {
   const noteWidth = visibleWidth(note);
   const room = Math.max(10, width - (noteWidth ? noteWidth + 2 : 0));
@@ -94,7 +127,11 @@ export function row<Args>(spec: RowSpec<Args>) {
         ? theme.fg("error", getText(result).trim())
         : spec.body ? spec.body(result, theme, ctx.args as Args) : theme.fg("toolOutput", getText(result).trimEnd());
       ctx.state.hasBody = true;
-      return tinted(ctx, theme, new Text(body, 0, 0), new Spacer(1));
+      const pictures = images(result, theme, ctx);
+      if (!pictures.length) return tinted(ctx, theme, new Text(body, 0, 0), new Spacer(1));
+      const out = new Container();
+      for (const child of [tinted(ctx, theme, new Text(body, 0, 0)), ...pictures, new Spacer(1)]) out.addChild(child);
+      return out;
     },
   };
 }

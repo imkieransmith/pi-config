@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { advisorRow } from "../advisor/row.ts";
 import { bashRow, countNote, getText, row } from "../tool-pills/renderers.ts";
 import { pill } from "../tool-pills/pill.ts";
@@ -55,6 +56,28 @@ test("running rows have no note or toggle marker", () => {
   const lines = draw(undefined, { isPartial: true }).slice(1, -1);
   assert.equal(lines.length, 1);
   assert.doesNotMatch(lines[0], /[▸▾]/);
+});
+
+test("images only show in an open row", () => {
+  setCapabilities({ images: "iterm2", trueColor: true, hyperlinks: true });
+  // A 1x1 PNG.
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const result: any = { content: [{ type: "text", text: "Read image file [image/png]" }, { type: "image", data, mimeType: "image/png" }] };
+  const read = row({ name: "read", call: () => "shot.png" });
+  const drawRead = (expanded: boolean) => {
+    const ctx: any = { state: {}, expanded, isError: false, isPartial: false, args: {} };
+    const call = read.renderCall({}, theme, ctx);
+    const body = read.renderResult(result, { expanded }, theme, ctx);
+    return [...call.render(60), ...body.render(60)].join("\n");
+  };
+  try {
+    assert.doesNotMatch(drawRead(false), /1337;File=/);
+    assert.match(drawRead(false), /image ▸/);
+    assert.match(drawRead(true), /1337;File=/);
+    assert.match(drawRead(true), /\n \x1b\[\d+A\x1b\]1337;File=/, "indented to line up with the row text");
+  } finally {
+    resetCapabilitiesCache();
+  }
 });
 
 test("diff notes count added and removed lines", () => {
