@@ -25,7 +25,7 @@ import snapshots from "../context/index.ts";
 import evidence from "../evidence.ts";
 import security from "../security/index.ts";
 import redact from "../redact.ts";
-import rtk from "../rtk.ts";
+import sandbox from "../sandbox/index.ts";
 import metrics, { formatMetricsRow } from "../response-metrics.ts";
 import meep from "../meep.ts";
 import { paintLine, patchRender } from "../colour-messages/index.ts";
@@ -64,7 +64,7 @@ function context(id = "one", manager?: object): ExtensionContext {
 
 test("background features register tools and hooks without extra commands", () => {
   const { pi, commands, tools, hooks } = harness();
-  for (const register of [snapshots, evidence, security, redact, rtk]) register(pi);
+  for (const register of [snapshots, evidence, security, redact, sandbox]) register(pi);
   assert.deepEqual([...commands.keys()], ["evidence"]);
   assert.ok(tools.has("context_snapshot") && tools.has("evidence_add") && tools.has("bash"));
   assert.ok(hooks.has("tool_result") && hooks.has("tool_call"));

@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
-import { sandboxedBashOperations } from "../shared/sandbox.ts";
+import { sandboxedBashOperations } from "../sandbox/operations.ts";
 
 test("sandboxed bash reads git history and .env but cannot change either, or reach home", { skip: !SandboxManager.isSupportedPlatform() }, async t => {
   const repo = await mkdtemp(join(tmpdir(), "pi-sandbox-"));
@@ -36,6 +36,7 @@ test("sandboxed bash reads git history and .env but cannot change either, or rea
   assert.match((await run("cat .env")).output, /APP_KEY=local/);
   assert.notEqual((await run("echo X=1 >> .env")).exitCode, 0);
   assert.equal((await run("echo ok > new.txt")).exitCode, 0);
+  assert.equal((await run(`touch /tmp/pi-sandbox-probe-${process.pid} && rm /tmp/pi-sandbox-probe-${process.pid}`)).exitCode, 0);
 
   assert.notEqual((await run(`cat "${join(home, "private.txt")}"`)).exitCode, 0);
   assert.match((await run('echo "key=${FAKE_API_KEY:-unset}"')).output, /key=unset/);

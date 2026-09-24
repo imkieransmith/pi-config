@@ -2,7 +2,7 @@
  * Confirm Pi tool calls that could destroy work git can't restore.
  *
  *   - Covers write overwrites, large edit removals, and destructively-named
- *     custom tools. Bash is not checked: the sandbox (./shared/sandbox.ts)
+ *     custom tools. Bash is not checked: the sandbox (./sandbox/)
  *     keeps it inside the project with `.git` read-only.
  *   - Edits to tracked files skip size-based prompts, even with uncommitted
  *     changes. Full overwrites keep their stricter checks.

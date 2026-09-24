@@ -1,6 +1,6 @@
 /**
- * Runs the agent's bash commands inside an OS sandbox (sandbox-exec on macOS,
- * bubblewrap on Linux) via @anthropic-ai/sandbox-runtime.
+ * The sandbox rules, and bash operations that run commands under them
+ * (sandbox-exec on macOS, bubblewrap on Linux) via @anthropic-ai/sandbox-runtime.
  *
  * - Reads: home is hidden except the project and the tool folders below.
  * - Writes: the project, /tmp and package caches only. The project's `.git`
@@ -46,10 +46,12 @@ function config(cwd: string): SandboxRuntimeConfig {
         cwd,
         "~/.nvm", "~/.local/bin", "~/.local/lib", "~/.pi/agent/bin",
         "~/Library/Application Support/Herd/bin", "~/Library/Application Support/Herd/config/php",
+        "~/Library/Application Support/Herd/config/herd.json",
         "~/.gitconfig", "~/.config/git",
         "~/.composer", "~/Library/Caches/composer", "~/.npm",
       ],
-      allowWrite: [cwd, "/tmp", "~/Library/Caches/composer", "~/.npm"],
+      // srt drops a bare "/tmp" on macOS because it resolves to /private/tmp; name the real path.
+      allowWrite: [cwd, process.platform === "darwin" ? "/private/tmp" : "/tmp", "~/Library/Caches/composer", "~/.npm"],
       denyWrite: [path.join(cwd, ".git"), path.join(cwd, ".env"), ...PI_PRIVATE],
     },
   };
@@ -61,7 +63,9 @@ export function sandboxedBashOperations(cwd: string): BashOperations {
   const local = createLocalBashOperations();
   return {
     async exec(command, dir, options) {
-      ready ??= SandboxManager.initialize(config(cwd));
+      // srt outlives /reload and ignores a second initialize, so clear it first
+      // or edited rules only apply after a full restart.
+      ready ??= SandboxManager.reset().then(() => SandboxManager.initialize(config(cwd)));
       try {
         await ready;
       } catch (error) {

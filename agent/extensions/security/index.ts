@@ -1,7 +1,7 @@
 /**
  * Protect sensitive paths from Pi's own file tools (read, write, edit, grep,
  * find, ls). These run inside Pi, not through bash, so the sandbox in
- * ../shared/sandbox.ts does not cover them.
+ * ../sandbox/ does not cover them.
  *
  * Bash is not checked here: the sandbox enforces its limits at the OS level.
  * Data-loss confirms for write/edit live in ../confirm-destructive.ts.
