@@ -37,13 +37,17 @@ export function renderCard(pi: ExtensionAPI, theme: Theme, width: number, where:
 		const wrapped = wrapTextWithAnsi(items.join("  "), Math.max(1, width - label));
 		return wrapped.map((line, i) => theme.fg("dim", (i ? "" : name).padEnd(label)) + theme.fg(colour, line));
 	};
+	const sections = [
+		section("commands", commands, "accent"),
+		section("skills", skills, "muted"),
+		section("tools", pi.getActiveTools(), "muted"),
+	].filter((lines) => lines.length > 0);
 	const lines = [
-		theme.bold(theme.fg("accent", "pi")) + theme.fg("dim", `  v${VERSION}`),
-		theme.fg("muted", where),
+		theme.bold(theme.fg("accent", "𝝿")),
 		"",
-		...section("commands", commands, "accent"),
-		...section("skills", skills, "muted"),
-		...section("tools", pi.getActiveTools(), "muted"),
+		theme.fg("dim", `v${VERSION} - `) + theme.fg("muted", where),
+		"",
+		...sections.flatMap((lines, i) => i ? ["", ...lines] : lines),
 	];
 	return lines.map((line) => truncateToWidth(line, width));
 }
@@ -85,7 +89,11 @@ export default function (pi: ExtensionAPI) {
 				tui.requestRender();
 			}, () => {});
 
-			const where = () => [basename(ctx.cwd) || ctx.cwd, ctx.model?.id, pi.getThinkingLevel()].filter(Boolean).join(" · ");
+			const where = () => {
+				const model = ctx.model?.id;
+				const thinking = pi.getThinkingLevel();
+				return [basename(ctx.cwd) || ctx.cwd, model && thinking ? `${model} (${thinking})` : model].filter(Boolean).join(" - ");
+			};
 
 			return {
 				dispose: () => stop(),

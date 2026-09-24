@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { join } from "node:path";
-import { createGrepToolDefinition, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { createGrepToolDefinition, VERSION, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import plan from "../plan.ts";
 import advisor from "../advisor/index.ts";
@@ -263,9 +263,23 @@ test("search filtering removes sensitive descendants and raw truncation details"
   }
 });
 
-test("landing card reflects actual commands/tools and stays within terminal width", () => {
+test("landing card separates nonempty sections and stays within terminal width", () => {
   const { pi } = harness();
-  for (const width of [1, 8, 40, 100]) for (const line of renderCard(pi, theme, width, "~/.pi · model")) assert.ok(visibleWidth(line) <= width);
+  const sourceInfo = { path: "test", source: "test", scope: "user" as const, origin: "top-level" as const };
+  pi.getCommands = () => [
+    { name: "evidence", source: "extension", description: "Evidence", sourceInfo },
+    { name: "skill:write-plan", source: "skill", description: "Plan work", sourceInfo },
+  ];
+  const where = "js13k-2026-2 - gpt-6-sol (high)";
+  const card = renderCard(pi, theme, 60, where);
+  assert.deepEqual(card.slice(0, 4), ["𝝿", "", `v${VERSION} - ${where}`, ""]);
+  assert.deepEqual(card.slice(4), [
+    "commands  /evidence", "", "skills    write-plan", "", "tools     read  ask_user_question",
+  ]);
+  pi.getCommands = () => [];
+  assert.equal(renderCard(pi, theme, 8, where)[0], "𝝿");
+  assert.equal(renderCard(pi, theme, 60, where).filter((line) => line === "").length, 2);
+  for (const width of [1, 8, 40, 100]) for (const line of renderCard(pi, theme, width, where)) assert.ok(visibleWidth(line) <= width);
 });
 
 test("footer keeps statuses inline without empty rows and disposes its subscription", async () => {
