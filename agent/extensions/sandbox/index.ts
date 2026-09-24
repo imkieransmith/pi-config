@@ -33,7 +33,7 @@ export default function (pi: ExtensionAPI) {
     },
     ...bashRow,
     renderCall(args, theme, ctx) {
-      explainLater(args.command, ctx);
+      explainLater("bash", args.command, ctx);
       return bashRow.renderCall(args, theme, ctx);
     },
   });

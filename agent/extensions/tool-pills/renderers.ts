@@ -16,7 +16,7 @@ type Png = { data: string; mimeType: string };
 export type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2] & {
   state: {
     note?: string; hasBody?: boolean; png?: Record<number, Png | "pending" | "failed">;
-    /** bash only: the plain-English sentence, and whether one has been asked for (explain.ts). */
+    /** bash/grep: the plain-English sentence, and whether one has been asked for (explain.ts). */
     plain?: string; asked?: boolean;
   };
 };

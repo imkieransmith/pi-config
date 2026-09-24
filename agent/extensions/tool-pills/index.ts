@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { protectDiscovery } from "../security/search.ts";
 import { registerDiffTools } from "./diff-renderer.js";
+import { explainLater, startExplaining, stopExplaining } from "./explain.js";
 import { countNote, getText, wrapBasicTool } from "./renderers.js";
 
 /** Counts output lines, ignoring Pi's "No matches found" style messages and truncation notes. */
@@ -22,6 +23,10 @@ const lineCount = (one: string, many: string) => (result: any) => {
 };
 
 export default function (pi: ExtensionAPI) {
+	pi.on("session_start", (_event, ctx) => startExplaining(ctx, pi));
+	pi.on("session_tree", (_event, ctx) => startExplaining(ctx, pi));
+	pi.on("session_shutdown", () => stopExplaining());
+
 	const cwd = process.cwd();
 
 	// ls
@@ -57,11 +62,12 @@ export default function (pi: ExtensionAPI) {
 	// grep
 	wrapBasicTool(pi, protectDiscovery(createGrepToolDefinition(cwd)), {
 		name: "grep",
-		call: (args: any, theme) => {
+		call: (args: any, theme, ctx) => {
+			explainLater("grep", JSON.stringify(args), ctx);
 			let t = theme.fg("accent", `"${args.pattern}"`);
 			if (args.path) t += theme.fg("dim", ` in ${args.path}`);
 			if (args.glob) t += theme.fg("dim", ` ${args.glob}`);
-			return t;
+			return ctx.state.plain ? ctx.expanded ? `${ctx.state.plain}\n${t}` : ctx.state.plain : t;
 		},
 		note: lineCount("match", "matches"),
 	});

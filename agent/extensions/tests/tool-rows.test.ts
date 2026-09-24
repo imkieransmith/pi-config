@@ -2,16 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { setImmediate } from "node:timers/promises";
 import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { advisorRow } from "../advisor/row.ts";
 import { explainLater, startExplaining, stopExplaining } from "../tool-pills/explain.ts";
+import toolPills from "../tool-pills/index.ts";
 import { bashRow, countNote, getText, row } from "../tool-pills/renderers.ts";
 import { pill } from "../tool-pills/pill.ts";
 import { diffNote } from "../tool-pills/diff-renderer.ts";
 import askUserQuestion from "../ask-user-question/index.ts";
 import context from "../context/index.ts";
+const piRoot = join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "..", "..");
 import evidence from "../evidence.ts";
 
 const theme: any = { fg: (_: string, t: string) => t, bg: (_: string, t: string) => t, bold: (t: string) => t, inverse: (t: string) => t, getBgAnsi: () => "" };
@@ -163,6 +166,122 @@ test("the advisor's own row copy draws the same lines as the shared row", () => 
   assert.ok(pill("advisor", ansiTheme).includes("\x1b[38;2;47;95;159m advisor "), "same pill colour");
 });
 
+test("grep rows get saved plain-English headlines and show the search when open", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-grep-explain-test-"));
+  const before = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  t.after(async () => {
+    stopExplaining();
+    if (before === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = before;
+    await rm(dir, { recursive: true, force: true });
+  });
+  await writeFile(join(dir, "settings.json"), JSON.stringify({ explain: { model: "openrouter/cheap/model" } }));
+  const entries: any[] = [];
+  const tools: Record<string, any> = {};
+  const pi: any = {
+    on() {},
+    appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
+    registerTool: (tool: any) => { tools[tool.name] = tool; },
+  };
+  toolPills(pi);
+  const prompts: any[] = [];
+  const session: any = {
+    sessionManager: { getBranch: () => entries },
+    ui: { notify() {} },
+    modelRegistry: {
+      find: (provider: string, id: string) => ({ provider, id }),
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+      getProvider: () => ({ streamSimple: (_model: unknown, payload: any) => {
+        prompts.push(payload);
+        return { result: async () => ({ content: [{ type: "text", text: "Finds references to entry saving and session starts." }], stopReason: "stop" }) };
+      } }),
+    },
+  };
+  startExplaining(session, pi);
+  const args = { pattern: "appendEntry|session_start", path: "agent/extensions", glob: "*.ts", ignoreCase: true };
+  let redrawn = false;
+  const live: any = { toolCallId: "grep-1", args, state: {}, cwd: "/code/app", argsComplete: true, isPartial: false, expanded: false, isError: false, invalidate: () => { redrawn = true; } };
+  const strip = (lines: string[]) => lines.map(l => l.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
+  tools.grep.renderCall(args, theme, live).render(160);
+  await setImmediate();
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0].messages[0].content, /file search/);
+  assert.equal(prompts[0].messages[1].content, `Working folder: /code/app\nSearch: ${JSON.stringify(args)}`);
+  assert.ok(redrawn);
+  assert.deepEqual(entries, [{ type: "custom", customType: "grep-explanation", data: { toolCallId: "grep-1", sentence: "Finds references to entry saving and session starts." } }]);
+  assert.match(strip(tools.grep.renderCall(args, theme, live).render(160))[1], /grep +Finds references to entry saving and session starts\./);
+  live.expanded = true;
+  const open = strip(tools.grep.renderCall(args, theme, live).render(160));
+  assert.equal(open[2], "");
+  assert.ok(open.some(line => line.includes('"appendEntry|session_start" in agent/extensions *.ts')));
+
+  startExplaining(session, pi);
+  const restored: any = { ...live, state: {}, argsComplete: false, executionStarted: false };
+  assert.match(strip(tools.grep.renderCall(args, theme, restored).render(160))[1], /Finds references to entry saving and session starts\./);
+  assert.equal(prompts.length, 1, "restored rows do not contact Luna");
+});
+
+test("separately loaded extensions both start their own explanation state", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-isolated-explain-test-"));
+  const before = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  t.after(async () => {
+    if (before === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = before;
+    await rm(dir, { recursive: true, force: true });
+  });
+  await writeFile(join(dir, "settings.json"), JSON.stringify({ explain: { model: "openrouter/cheap/model" } }));
+  const { createJiti } = await import(pathToFileURL(join(piRoot, "node_modules/jiti/lib/jiti.mjs")).href);
+  const alias = {
+    "@earendil-works/pi-coding-agent": join(piRoot, "dist/bundle/index.js"),
+    "@earendil-works/pi-ai": join(piRoot, "node_modules/@earendil-works/pi-ai/dist/compat.js"),
+    "@earendil-works/pi-tui": join(piRoot, "node_modules/@earendil-works/pi-tui/dist/index.js"),
+  };
+  const load = async (file: string) => createJiti(join(piRoot, "dist/core/extensions/loader.js"), { moduleCache: false, alias })
+    .import(join(process.cwd(), `agent/extensions/${file}/index.ts`), { default: true });
+  const hooks: Record<string, Record<string, Function>> = {};
+  const tools: Record<string, any> = {};
+  for (const name of ["sandbox", "tool-pills"]) {
+    hooks[name] = {};
+    const register = await load(name);
+    register({
+      on: (event: string, handler: Function) => { hooks[name][event] = handler; },
+      registerTool: (tool: any) => { tools[tool.name] = tool; },
+      appendEntry: (type: string, data: any) => entries.push({ type: "custom", customType: type, data }),
+    });
+  }
+  const prompts: string[] = [];
+  const entries: any[] = [];
+  const session: any = {
+    sessionManager: { getBranch: () => entries }, ui: { notify() {} },
+    modelRegistry: {
+      find: (provider: string, id: string) => ({ provider, id }),
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+      getProvider: () => ({ streamSimple: (_model: unknown, payload: any) => {
+        prompts.push(payload.messages[1].content);
+        return { result: async () => ({ content: [{ type: "text", text: "Finds saved entries." }], stopReason: "stop" }) };
+      } }),
+    },
+  };
+  hooks.sandbox.session_start({}, session);
+  hooks["tool-pills"].session_start({}, session);
+  const args = { pattern: "appendEntry", path: "agent/extensions" };
+  const ctx: any = { toolCallId: "isolated-grep", args, state: {}, cwd: "/code/app", argsComplete: true, isPartial: false, expanded: false, isError: false, invalidate() {} };
+  tools.grep.renderCall(args, theme, ctx).render(120);
+  await setImmediate();
+  assert.equal(prompts.length, 1);
+  assert.equal(ctx.state.plain, "Finds saved entries.");
+  assert.deepEqual(entries, [{ type: "custom", customType: "grep-explanation", data: { toolCallId: "isolated-grep", sentence: "Finds saved entries." } }]);
+  hooks["tool-pills"].session_start({}, session);
+  const restored: any = { ...ctx, state: {}, argsComplete: false };
+  tools.grep.renderCall(args, theme, restored).render(120);
+  assert.equal(restored.state.plain, "Finds saved entries.");
+  assert.equal(prompts.length, 1);
+  hooks.sandbox.session_shutdown();
+  hooks["tool-pills"].session_shutdown();
+});
+
 test("bash rows swap in a plain-English headline and keep the command when open", async t => {
   const dir = await mkdtemp(join(tmpdir(), "pi-explain-test-"));
   const before = process.env.PI_CODING_AGENT_DIR;
@@ -192,13 +311,13 @@ test("bash rows swap in a plain-English headline and keep the command when open"
 
   // A row rebuilt from a saved session never has its arguments marked complete.
   const restored: any = { toolCallId: "old-call", state: {}, args: { command: unique }, isPartial: true, invalidate() {} };
-  explainLater(unique, restored);
+  explainLater("bash", unique, restored);
   assert.equal(restored.state.asked, undefined);
 
   let redrawn = false;
   const live: any = { toolCallId: "call-1", state: {}, args: { command: unique }, cwd: "/code/app", argsComplete: true, isPartial: true, expanded: false, isError: false, invalidate: () => { redrawn = true; } };
-  explainLater(unique, live);
-  explainLater(unique, live);
+  explainLater("bash", unique, live);
+  explainLater("bash", unique, live);
   await setImmediate();
   assert.deepEqual(sent, [`Working folder: /code/app\nCommand: ${unique}`], "asks once per row, with the folder");
   assert.ok(redrawn);
@@ -214,19 +333,19 @@ test("bash rows swap in a plain-English headline and keep the command when open"
   // Rebuild from saved entries as /reload or /resume does, without asking Luna.
   startExplaining(session, pi);
   const reopened: any = { ...restored, toolCallId: "call-1", state: {} };
-  explainLater(unique, reopened);
+  explainLater("bash", unique, reopened);
   assert.equal(reopened.state.plain, "Runs the tests and lists changed files.");
   assert.equal(sent.length, 1);
   assert.equal(entries.length, 1);
 
   // Repeated commands reuse the sentence but get their own saved tool-call ID.
   const repeated: any = { ...live, toolCallId: "call-2", state: {} };
-  explainLater(unique, repeated);
+  explainLater("bash", unique, repeated);
   await setImmediate();
   assert.equal(sent.length, 2, "cache resets on session start");
   assert.equal(entries.length, 2);
   const again: any = { ...live, toolCallId: "call-3", state: {} };
-  explainLater(unique, again);
+  explainLater("bash", unique, again);
   assert.equal(sent.length, 2);
   assert.equal(entries.length, 3);
 
@@ -234,14 +353,14 @@ test("bash rows swap in a plain-English headline and keep the command when open"
   session.sessionManager.getBranch = () => [];
   startExplaining(session, pi);
   const otherBranch: any = { ...restored, toolCallId: "call-1", state: {} };
-  explainLater(unique, otherBranch);
+  explainLater("bash", unique, otherBranch);
   assert.equal(otherBranch.state.plain, undefined);
 
   // A reply from the old branch cannot save into the new branch.
   let resolveReply!: (reply: any) => void;
   session.modelRegistry.getProvider = () => ({ streamSimple: () => ({ result: () => new Promise(resolve => { resolveReply = resolve; }) }) });
   const pending: any = { ...live, toolCallId: "call-4", state: {} };
-  explainLater(unique, pending);
+  explainLater("bash", unique, pending);
   await setImmediate();
   startExplaining(session, pi);
   resolveReply({ content: [{ type: "text", text: "Stale sentence." }], stopReason: "stop" });

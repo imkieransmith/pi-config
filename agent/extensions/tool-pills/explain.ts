@@ -1,14 +1,14 @@
 /**
- * Plain-English headlines for bash rows.
+ * Plain-English headlines for bash and grep rows.
  *
- * Once the agent has finished writing a bash command, a small model turns it
+ * Once the agent has finished writing a tool call, a small model turns it
  * into one short sentence, and the row swaps its headline when the reply comes
- * back. The open row shows the sentence, the raw command, then the output.
+ * back. The open row shows the sentence, the raw call, then the output.
  * Set the model in settings.json as "provider/model-id":
  *
  *   "explain": { "model": "openrouter/deepseek/deepseek-v4-flash-0731" }
  *
- * No model set, or any failure, leaves the raw command in place.
+ * No model set, or any failure, leaves the raw call in place.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,7 +17,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { redact_text } from "../redact.ts";
 import type { RenderContext } from "./renderers.ts";
 
-const PROMPT = `Describe what a shell command does, for a web developer who rarely uses the terminal.
+const BASH_PROMPT = `Describe what a shell command does, for a web developer who rarely uses the terminal.
 You get the working folder, then the command.
 - One sentence, under 15 words, starting with a verb.
 - Say the goal, not each step. Skip moving into the working folder, and details like "first five" or hiding errors.
@@ -35,6 +35,17 @@ grep -rn TODO src; du -sh storage
 → Looks for TODO notes in src, then checks how big storage is.
 rm -rf node_modules && npm install
 → Deletes and reinstalls the project's packages.`;
+const GREP_PROMPT = `Describe what a file search looks for, for a web developer.
+You get the working folder and the grep tool's search options.
+- One sentence, under 15 words, starting with a verb.
+- Explain the goal, not the regex syntax. Mention the folder or file filter when useful.
+- Don't guess what unfamiliar names mean. Skip limits and other minor options.
+- No code, markdown or preamble.
+
+Example:
+{"pattern":"appendEntry|renderCall|session_start","path":"agent/extensions","glob":"*.ts"}
+→ Finds references to entry saving, call rendering, or session starts in extension TypeScript files.`;
+type Kind = "bash" | "grep";
 const TIMEOUT_MS = 15_000;
 /**
  * Extra request fields. Thinking would only slow a one-sentence answer, so turn
@@ -42,13 +53,13 @@ const TIMEOUT_MS = 15_000;
  */
 const REQUEST = { reasoning: { enabled: false } };
 
-const ENTRY_TYPE = "bash-explanation";
+const ENTRY_TYPES: Record<Kind, string> = { bash: "bash-explanation", grep: "grep-explanation" };
 type Explanation = { toolCallId: string; sentence: string };
 
 let session: ExtensionContext | undefined;
 let writer: ExtensionAPI | undefined;
 let generation = 0;
-/** Finished sentences by command, so a repeated command costs nothing during this session. */
+/** Finished sentences by input, so a repeated call costs nothing during this session. */
 const sentences = new Map<string, string>();
 const byCall = new Map<string, string>();
 let warned = false;
@@ -61,7 +72,7 @@ export function startExplaining(ctx: ExtensionContext, pi: ExtensionAPI): void {
   sentences.clear();
   byCall.clear();
   for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
+    if (entry.type !== "custom" || !Object.values(ENTRY_TYPES).includes(entry.customType)) continue;
     const data = entry.data as Partial<Explanation> | undefined;
     if (typeof data?.toolCallId === "string" && typeof data.sentence === "string" && data.sentence) {
       byCall.set(data.toolCallId, data.sentence);
@@ -77,9 +88,9 @@ export function stopExplaining(): void {
   byCall.clear();
 }
 
-function save(toolCallId: string, sentence: string): void {
+function save(kind: Kind, toolCallId: string, sentence: string): void {
   if (byCall.has(toolCallId)) return;
-  writer?.appendEntry(ENTRY_TYPE, { toolCallId, sentence } satisfies Explanation);
+  writer?.appendEntry(ENTRY_TYPES[kind], { toolCallId, sentence } satisfies Explanation);
   byCall.set(toolCallId, sentence);
 }
 
@@ -92,7 +103,7 @@ function modelKey(): string | undefined {
   }
 }
 
-async function ask(ctx: ExtensionContext, key: string, message: string): Promise<string> {
+async function ask(ctx: ExtensionContext, key: string, kind: Kind, message: string): Promise<string> {
   const slash = key.indexOf("/");
   const model = slash > 0 ? ctx.modelRegistry.find(key.slice(0, slash), key.slice(slash + 1)) as Model<Api> | undefined : undefined;
   if (!model) throw new Error(`model ${key} not found`);
@@ -102,7 +113,7 @@ async function ask(ctx: ExtensionContext, key: string, message: string): Promise
   if (!provider) throw new Error(`provider ${model.provider} is unavailable`);
   const reply = await provider.streamSimple(
     model,
-    normalizeContext({ systemPrompt: PROMPT, messages: [{ role: "user", content: redact_text(message).redacted, timestamp: Date.now() }], tools: [] }),
+    normalizeContext({ systemPrompt: kind === "bash" ? BASH_PROMPT : GREP_PROMPT, messages: [{ role: "user", content: redact_text(message).redacted, timestamp: Date.now() }], tools: [] }),
     { apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: AbortSignal.timeout(TIMEOUT_MS), samplingParams: REQUEST, maxTokens: 200 },
   ).result();
   if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(reply.errorMessage || reply.stopReason);
@@ -110,22 +121,23 @@ async function ask(ctx: ExtensionContext, key: string, message: string): Promise
 }
 
 /**
- * Call from the bash row's renderCall. Saved rows load by tool-call ID;
+ * Call from a tool row's renderCall. Saved rows load by tool-call ID;
  * only live rows ask the model. Reopening a session sends nothing.
  */
-export function explainLater(command: string | undefined, ctx: RenderContext): void {
-  if (!command) return;
+export function explainLater(kind: Kind, input: string | undefined, ctx: RenderContext): void {
+  if (!input) return;
   const stored = byCall.get(ctx.toolCallId);
   if (stored) {
     ctx.state.plain = stored;
     return;
   }
   if (ctx.state.asked || !(ctx.argsComplete || ctx.executionStarted)) return;
-  // The folder lets the model skip a `cd` into it. It's part of the cache key, since it changes the answer.
-  const message = `Working folder: ${ctx.cwd}\nCommand: ${command}`;
-  const known = sentences.get(message);
+  // The folder is part of the cache key, since it changes the answer.
+  const message = `Working folder: ${ctx.cwd}\n${kind === "bash" ? "Command" : "Search"}: ${input}`;
+  const cacheKey = `${kind}\n${message}`;
+  const known = sentences.get(cacheKey);
   if (known) {
-    save(ctx.toolCallId, known);
+    save(kind, ctx.toolCallId, known);
     ctx.state.plain = known;
     return;
   }
@@ -134,15 +146,15 @@ export function explainLater(command: string | undefined, ctx: RenderContext): v
   ctx.state.asked = true;
   const current = session;
   const started = generation;
-  ask(current, key, message).then(sentence => {
+  ask(current, key, kind, message).then(sentence => {
     if (!sentence || started !== generation) return;
-    save(ctx.toolCallId, sentence);
-    sentences.set(message, sentence);
+    save(kind, ctx.toolCallId, sentence);
+    sentences.set(cacheKey, sentence);
     ctx.state.plain = sentence;
     ctx.invalidate();
   }, error => {
     if (started !== generation || warned) return;
     warned = true;
-    current.ui.notify(`Couldn't explain bash commands: ${error instanceof Error ? error.message : error}`, "warning");
+    current.ui.notify(`Couldn't explain tool calls: ${error instanceof Error ? error.message : error}`, "warning");
   });
 }
