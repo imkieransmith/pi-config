@@ -195,13 +195,6 @@ test("canonical resolution exposes traversal and symlink escapes", async (t) => 
     path.join(outside, "new.txt"),
   );
 
-  const escaped = await classifyResolvedPath(
-    path.join(outside, "new.txt"),
-    "escape/new.txt",
-    workspace,
-    path.join(temp, "home"),
-    "mutate",
-  );
-  assert.equal(escaped.action, "block");
-  assert.equal(escaped.reason, "file mutation outside project");
+  // Test resolution here, not policy: os.tmpdir() may be inside trusted /tmp.
+  // The outside-workspace policy and /tmp escape cases above test denials.
 });

@@ -2,7 +2,7 @@
  * Compact one-line row for the advisor tool: pill, brief and a note on the right;
  * expanding shows the whole brief and the advice.
  *
- * A trimmed copy of tool-pills/renderers.ts `row()`, kept here because the advisor
+ * A trimmed copy of shared/tool-rows.ts `row()`, kept here because the advisor
  * folder must not import from outside itself. tests/tool-rows.test.ts checks
  * that both draw the same lines.
  */
@@ -25,22 +25,28 @@ function note(result: AgentToolResult<any>): string {
 	return text(result).trim() ? `${n} ${n === 1 ? "line" : "lines"}` : "no output";
 }
 
-function tinted(ctx: RenderContext, theme: Theme, ...children: Component[]): Box {
+function tinted(ctx: RenderContext, theme: Theme, ...children: Component[]): Component {
 	const role = ctx.isPartial ? "toolPendingBg" : ctx.isError ? "toolErrorBg" : "toolSuccessBg";
 	const box = new Box(1, 0, (t) => theme.bg(role, t.replaceAll("\x1b[0m", `\x1b[0m${theme.getBgAnsi(role)}`)));
 	for (const child of children) box.addChild(child);
-	return box;
+	return {
+		invalidate: () => box.invalidate(),
+		render: width => box.render(width).map(line => truncateToWidth(line, Math.max(0, width))
+			.replaceAll("\x1b[0m", `\x1b[0m${theme.getBgAnsi(role)}`)),
+	};
 }
 
 function header(head: string, noteText: string, width: number, expanded: boolean, theme: Theme): string[] {
+	if (width < 1) return [""];
+	noteText = width < 12 ? "" : truncateToWidth(noteText, Math.floor(width / 2), "");
 	const noteWidth = visibleWidth(noteText);
-	const room = Math.max(10, width - (noteWidth ? noteWidth + 2 : 0));
+	const room = Math.max(1, width - (noteWidth ? noteWidth + 2 : 0));
 	const [first, ...rest] = head.split("\n");
 	const lines = expanded
 		? [...wrapTextWithAnsi(first, room), "", ...rest.flatMap((line) => wrapTextWithAnsi(line, room))]
 		: [truncateToWidth(rest.length ? `${first}${theme.fg("dim", " …")}` : first, room)];
-	lines[0] += " ".repeat(Math.max(1, width - visibleWidth(lines[0]) - noteWidth)) + noteText;
-	return lines;
+	if (noteWidth) lines[0] += " ".repeat(Math.max(1, width - visibleWidth(lines[0]) - noteWidth)) + noteText;
+	return lines.map(line => truncateToWidth(line, width));
 }
 
 export const advisorRow = {

@@ -10,6 +10,10 @@
  * Original - https://github.com/michalvavra/agents/blob/main/agents/pi/extensions/security.ts
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition } from "@earendil-works/pi-coding-agent";
+import { protectDiscovery } from "./search.ts";
+import { countNote, getText, wrapBasicTool } from "../shared/tool-rows.ts";
+import { explainLater, startExplaining, stopExplaining } from "../shared/explain.ts";
 import * as os from "node:os";
 import {
   classifyResolvedPath as classifyResolvedPathPolicy,
@@ -102,8 +106,42 @@ function toolString(input: unknown, field: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** Ignore native no-match messages and notices when counting visible results. */
+const lineCount = (one: string, many: string) => (result: any) => {
+  const lines = getText(result).split("\n").filter(l => l.trim() && !/^[[(].*[\])]$/.test(l.trim()));
+  return lines.length === 1 && /^No \w+ found/.test(lines[0]) ? `no ${many}` : countNote(lines.length, one, many);
+};
+
 export default function (pi: ExtensionAPI) {
   installSessionAllowReset(pi);
+  pi.on("session_start", (_event, ctx) => startExplaining(ctx, pi));
+  pi.on("session_tree", (_event, ctx) => startExplaining(ctx, pi));
+  pi.on("session_shutdown", () => stopExplaining());
+
+  // Own execution as well as root-path checks. Disabling a display extension
+  // must never remove filtering of protected descendants or expose raw output.
+  const cwd = process.cwd();
+  wrapBasicTool(pi, protectDiscovery(createLsToolDefinition(cwd)), {
+    name: "ls",
+    call: (args: any, theme) => theme.fg("accent", args.path || "."),
+    note: lineCount("entry", "entries"),
+  });
+  wrapBasicTool(pi, protectDiscovery(createFindToolDefinition(cwd)), {
+    name: "find",
+    call: (args: any, theme) => theme.fg("accent", `"${args.pattern}"`) + (args.path ? theme.fg("dim", ` in ${args.path}`) : ""),
+    note: lineCount("file", "files"),
+  });
+  wrapBasicTool(pi, protectDiscovery(createGrepToolDefinition(cwd)), {
+    name: "grep",
+    call: (args: any, theme, ctx) => {
+      explainLater("grep", JSON.stringify(args), ctx);
+      let text = theme.fg("accent", `"${args.pattern}"`);
+      if (args.path) text += theme.fg("dim", ` in ${args.path}`);
+      if (args.glob) text += theme.fg("dim", ` ${args.glob}`);
+      return ctx.state.plain ? ctx.expanded ? `${ctx.state.plain}\n${text}` : ctx.state.plain : text;
+    },
+    note: lineCount("match", "matches"),
+  });
 
   pi.on("tool_call", async (event, ctx) => {
     try {

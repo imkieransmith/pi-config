@@ -7,8 +7,8 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition, createLocalBashOperations } from "@earendil-works/pi-coding-agent";
-import { explainLater, startExplaining, stopExplaining } from "../tool-pills/explain.ts";
-import { bashRow } from "../tool-pills/renderers.ts";
+import { explainLater, startExplaining, stopExplaining } from "../shared/explain.ts";
+import { bashRow } from "../shared/tool-rows.ts";
 import { redact_value } from "../redact.ts";
 import { SANDBOX_NOTE, sandboxedBashOperations } from "./operations.ts";
 import { clearRtkCache, rtkRewrite } from "./rtk.ts";

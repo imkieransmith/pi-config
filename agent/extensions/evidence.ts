@@ -18,7 +18,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Box, Text } from "@earendil-works/pi-tui";
-import { countNote, row } from "./tool-pills/renderers.ts";
+import { countNote, row } from "./shared/tool-rows.ts";
 import { randomBytes } from "node:crypto";
 import {
   DEFAULT_LIST_LIMIT,

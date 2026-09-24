@@ -14,7 +14,7 @@ import type {
   ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import { compact as runCompaction } from "@earendil-works/pi-coding-agent";
-import { getText, row } from "../tool-pills/renderers.ts";
+import { getText, row } from "../shared/tool-rows.ts";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { randomBytes } from "node:crypto";

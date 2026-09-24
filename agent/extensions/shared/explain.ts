@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { normalizeContext, type Api, type Model } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { redact_text } from "../redact.ts";
-import type { RenderContext } from "./renderers.ts";
+import type { RenderContext } from "./tool-rows.ts";
 
 const BASH_PROMPT = `Describe what a shell command does, for a web developer who rarely uses the terminal.
 You get the working folder, then the command.
@@ -107,14 +107,10 @@ async function ask(ctx: ExtensionContext, key: string, kind: Kind, message: stri
   const slash = key.indexOf("/");
   const model = slash > 0 ? ctx.modelRegistry.find(key.slice(0, slash), key.slice(slash + 1)) as Model<Api> | undefined : undefined;
   if (!model) throw new Error(`model ${key} not found`);
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? `no API key for ${model.provider}` : auth.error);
-  const provider = ctx.modelRegistry.getProvider(model.provider);
-  if (!provider) throw new Error(`provider ${model.provider} is unavailable`);
-  const reply = await provider.streamSimple(
+  const reply = await ctx.modelRegistry.streamSimple(
     model,
     normalizeContext({ systemPrompt: kind === "bash" ? BASH_PROMPT : GREP_PROMPT, messages: [{ role: "user", content: redact_text(message).redacted, timestamp: Date.now() }], tools: [] }),
-    { apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: AbortSignal.timeout(TIMEOUT_MS), samplingParams: REQUEST, maxTokens: 200 },
+    { signal: AbortSignal.timeout(TIMEOUT_MS), samplingParams: REQUEST, maxTokens: 200 },
   ).result();
   if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(reply.errorMessage || reply.stopReason);
   return reply.content.flatMap(c => c.type === "text" ? [c.text] : []).join(" ").replace(/\s+/g, " ").trim();

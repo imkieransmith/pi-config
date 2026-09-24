@@ -16,7 +16,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_MAX_LINES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { redact_text } from "./redact.ts";
-import { countNote, getText, row } from "./tool-pills/renderers.ts";
+import { countNote, getText, row } from "./shared/tool-rows.ts";
 
 export const ENV_FILE = join(homedir(), ".pi", ".env");
 const TIMEOUT_MS = 60_000;

@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setImmediate } from "node:timers/promises";
-import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
+import { resetCapabilitiesCache, setCapabilities, visibleWidth } from "@earendil-works/pi-tui";
 import { advisorRow } from "../advisor/row.ts";
-import { explainLater, startExplaining, stopExplaining } from "../tool-pills/explain.ts";
-import toolPills from "../tool-pills/index.ts";
-import { bashRow, countNote, getText, row } from "../tool-pills/renderers.ts";
-import { pill } from "../tool-pills/pill.ts";
+import { explainLater, startExplaining, stopExplaining } from "../shared/explain.ts";
+import security from "../security/index.ts";
+import { bashRow, countNote, getText, row } from "../shared/tool-rows.ts";
+import { pill } from "../shared/tool-pill.ts";
 import { diffNote } from "../tool-pills/diff-renderer.ts";
 import askUserQuestion from "../ask-user-question/index.ts";
 import context from "../context/index.ts";
@@ -29,6 +29,22 @@ function draw(result: any, { expanded = false, isError = false, isPartial = fals
 }
 
 const output = { content: [{ type: "text", text: "pass 82\nfail 0\n M README.md\n" }] };
+
+test("shared and advisor rows fit narrow windows, long notes and wide text", () => {
+  const ansiTheme = { ...theme, fg: (_: string, s: string) => `\x1b[36m${s}\x1b[39m`, bg: (_: string, s: string) => `\x1b[44m${s}\x1b[49m`, getBgAnsi: () => "\x1b[44m" };
+  const shared = row<{ brief: string }>({ name: "advisor", call: args => args.brief, note: () => "a very long note 界🙂".repeat(4) });
+  for (const renderer of [shared, advisorRow]) for (const expanded of [false, true]) for (const isPartial of [false, true]) for (const isError of [false, true]) {
+    const args = { brief: "界🙂 café ".repeat(10) + "\nsecond line" };
+    for (const width of [1, 2, 3, 8, 12, 20, 40, 80]) {
+      const ctx: any = { state: {}, expanded, isPartial, isError, args };
+      const call = renderer.renderCall(args, ansiTheme, ctx);
+      const body = renderer.renderResult({ content: [{ type: "text", text: "界🙂 output\nmore" }], details: {} }, { expanded }, ansiTheme, ctx);
+      for (const line of [...call.render(width), ...body.render(width)]) {
+        assert.ok(visibleWidth(line) <= width, `${width} columns: ${JSON.stringify(line)}`);
+      }
+    }
+  }
+});
 
 test("collapsed rows are one line with a note on the right", () => {
   const lines = draw(output).slice(1, -1);
@@ -184,7 +200,7 @@ test("grep rows get saved plain-English headlines and show the search when open"
     appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
     registerTool: (tool: any) => { tools[tool.name] = tool; },
   };
-  toolPills(pi);
+  security(pi);
   const prompts: any[] = [];
   const session: any = {
     sessionManager: { getBranch: () => entries },
@@ -192,10 +208,10 @@ test("grep rows get saved plain-English headlines and show the search when open"
     modelRegistry: {
       find: (provider: string, id: string) => ({ provider, id }),
       getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
-      getProvider: () => ({ streamSimple: (_model: unknown, payload: any) => {
+      streamSimple: (_model: unknown, payload: any) => {
         prompts.push(payload);
         return { result: async () => ({ content: [{ type: "text", text: "Finds references to entry saving and session starts." }], stopReason: "stop" }) };
-      } }),
+      },
     },
   };
   startExplaining(session, pi);
@@ -242,7 +258,7 @@ test("separately loaded extensions both start their own explanation state", asyn
     .import(join(process.cwd(), `agent/extensions/${file}/index.ts`), { default: true });
   const hooks: Record<string, Record<string, Function>> = {};
   const tools: Record<string, any> = {};
-  for (const name of ["sandbox", "tool-pills"]) {
+  for (const name of ["sandbox", "security"]) {
     hooks[name] = {};
     const register = await load(name);
     register({
@@ -258,14 +274,14 @@ test("separately loaded extensions both start their own explanation state", asyn
     modelRegistry: {
       find: (provider: string, id: string) => ({ provider, id }),
       getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
-      getProvider: () => ({ streamSimple: (_model: unknown, payload: any) => {
+      streamSimple: (_model: unknown, payload: any) => {
         prompts.push(payload.messages[1].content);
         return { result: async () => ({ content: [{ type: "text", text: "Finds saved entries." }], stopReason: "stop" }) };
-      } }),
+      },
     },
   };
   hooks.sandbox.session_start({}, session);
-  hooks["tool-pills"].session_start({}, session);
+  hooks.security.session_start({}, session);
   const args = { pattern: "appendEntry", path: "agent/extensions" };
   const ctx: any = { toolCallId: "isolated-grep", args, state: {}, cwd: "/code/app", argsComplete: true, isPartial: false, expanded: false, isError: false, invalidate() {} };
   tools.grep.renderCall(args, theme, ctx).render(120);
@@ -273,13 +289,13 @@ test("separately loaded extensions both start their own explanation state", asyn
   assert.equal(prompts.length, 1);
   assert.equal(ctx.state.plain, "Finds saved entries.");
   assert.deepEqual(entries, [{ type: "custom", customType: "grep-explanation", data: { toolCallId: "isolated-grep", sentence: "Finds saved entries." } }]);
-  hooks["tool-pills"].session_start({}, session);
+  hooks.security.session_start({}, session);
   const restored: any = { ...ctx, state: {}, argsComplete: false };
   tools.grep.renderCall(args, theme, restored).render(120);
   assert.equal(restored.state.plain, "Finds saved entries.");
   assert.equal(prompts.length, 1);
   hooks.sandbox.session_shutdown();
-  hooks["tool-pills"].session_shutdown();
+  hooks.security.session_shutdown();
 });
 
 test("bash rows swap in a plain-English headline and keep the command when open", async t => {
@@ -298,11 +314,11 @@ test("bash rows swap in a plain-English headline and keep the command when open"
     modelRegistry: {
       find: (provider: string, id: string) => ({ provider, id }),
       getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }),
-      getProvider: () => ({ streamSimple: (_model: unknown, payload: any, options: any) => {
+      streamSimple: (_model: unknown, payload: any, options: any) => {
         assert.deepEqual(options.samplingParams, { reasoning: { enabled: false } }, "thinking off");
         sent.push(payload.messages.at(-1).content);
         return { result: async () => ({ content: [{ type: "text", text: "Runs the tests\nand lists changed files." }], stopReason: "stop" }) };
-      } }),
+      },
     },
   };
   startExplaining(session, pi);
@@ -358,7 +374,7 @@ test("bash rows swap in a plain-English headline and keep the command when open"
 
   // A reply from the old branch cannot save into the new branch.
   let resolveReply!: (reply: any) => void;
-  session.modelRegistry.getProvider = () => ({ streamSimple: () => ({ result: () => new Promise(resolve => { resolveReply = resolve; }) }) });
+  session.modelRegistry.streamSimple = () => ({ result: () => new Promise(resolve => { resolveReply = resolve; }) });
   const pending: any = { ...live, toolCallId: "call-4", state: {} };
   explainLater("bash", unique, pending);
   await setImmediate();

@@ -8,7 +8,7 @@ import type { AgentToolResult, ExtensionAPI, Theme, ToolDefinition } from "@eare
 import { convertToPng, highlightCode } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Container, getCapabilities, Image, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { redact_value } from "../redact.ts";
-import { pill } from "./pill.ts";
+import { pill } from "./tool-pill.ts";
 
 type Result = AgentToolResult<any>;
 /** Pi passes this to renderers; the package doesn't export its type. `state` is shared by one row's call and result. */
@@ -59,12 +59,17 @@ function lines(make: (width: number) => string[]): Component {
   return { render: make, invalidate() {} };
 }
 
-function tinted(ctx: RenderContext, theme: Theme, ...children: Component[]): Box {
+function tinted(ctx: RenderContext, theme: Theme, ...children: Component[]): Component {
   const role = ctx.isPartial ? "toolPendingBg" : ctx.isError ? "toolErrorBg" : "toolSuccessBg";
   // truncateToWidth ends cut text with a full reset, which would drop the tint for the rest of the line.
   const box = new Box(1, 0, text => theme.bg(role, text.replaceAll("\x1b[0m", `\x1b[0m${theme.getBgAnsi(role)}`)));
   for (const child of children) box.addChild(child);
-  return box;
+  return {
+    invalidate: () => box.invalidate(),
+    // Box padding and a wide character can exceed even a one-column window.
+    render: width => box.render(width).map(line => truncateToWidth(line, Math.max(0, width))
+      .replaceAll("\x1b[0m", `\x1b[0m${theme.getBgAnsi(role)}`)),
+  };
 }
 
 /**
@@ -98,14 +103,16 @@ function images(result: Result, theme: Theme, ctx: RenderContext): Component[] {
 }
 
 function headerLines(head: string, note: string, width: number, expanded: boolean, theme: Theme): string[] {
+  if (width < 1) return [""];
+  note = width < 12 ? "" : truncateToWidth(note, Math.floor(width / 2), "");
   const noteWidth = visibleWidth(note);
-  const room = Math.max(10, width - (noteWidth ? noteWidth + 2 : 0));
+  const room = Math.max(1, width - (noteWidth ? noteWidth + 2 : 0));
   const [first, ...rest] = head.split("\n");
   const lines = expanded
     ? [...wrapTextWithAnsi(first, room), "", ...rest.flatMap(line => wrapTextWithAnsi(line, room))]
     : [truncateToWidth(rest.length ? `${first}${theme.fg("dim", " …")}` : first, room)];
-  lines[0] += " ".repeat(Math.max(1, width - visibleWidth(lines[0]) - noteWidth)) + note;
-  return lines;
+  if (noteWidth) lines[0] += " ".repeat(Math.max(1, width - visibleWidth(lines[0]) - noteWidth)) + note;
+  return lines.map(line => truncateToWidth(line, width));
 }
 
 /** renderShell/renderCall/renderResult for a compact row. Spread into a tool definition. */

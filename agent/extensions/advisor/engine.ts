@@ -536,21 +536,15 @@ export async function runAdvisor(
 
 		const response = await retryAssistantCall(async () => {
 			if (params.signal?.aborted) return failedResponse("advisor call was aborted");
-			// Resolve auth again for each attempt, preserving provider wrappers and
-			// refreshed headers/environment. Setup errors stop without retrying.
-			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(params.model);
-			if (!auth.ok || !auth.apiKey) throw new Error(!auth.ok ? auth.error : `No request auth available for ${params.model.provider}. Check /login or the provider's API key.`);
-			const provider = ctx.modelRegistry.getProvider(params.model.provider);
-			if (!provider) throw new Error(`Provider ${params.model.provider} is unavailable`);
-			if (params.signal?.aborted) return failedResponse("advisor call was aborted");
+			// Each attempt goes through Pi's request preparation, including fresh
+			// auth, endpoint overrides, headers, environment and no-key providers.
 			requestAttempts += 1;
 			let result: AssistantMessage;
 			try {
-				result = await provider.streamSimple(
+				result = await ctx.modelRegistry.streamSimple(
 					params.model,
-					// Providers read the prompt only from the leading system message.
 					normalizeContext({ systemPrompt: ADVISOR_SYSTEM_PROMPT, messages: payload.messages, tools: [] }),
-					{ apiKey: auth.apiKey, headers: auth.headers, env: auth.env, signal: params.signal, reasoning: params.effort },
+					{ signal: params.signal, reasoning: params.effort },
 				).result();
 				usage = sumUsage(usage, result.usage);
 			} catch (error) {

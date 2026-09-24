@@ -105,8 +105,14 @@ export class AskUserQuestionComponent implements Component {
     ];
   }
 
+  private hasAnswer(q: Question, state: QuestionState): boolean {
+    return Boolean(state.freeTextValue?.trim()) || (q.multiSelect
+      ? state.selectedIndices.size > 0
+      : state.selectedIndex !== null);
+  }
+
   private allConfirmed(): boolean {
-    return this.states.every((s) => s.confirmed);
+    return this.states.every((state, index) => state.confirmed && this.hasAnswer(this.questions[index], state));
   }
 
   private get isSingle(): boolean {
@@ -469,6 +475,7 @@ export class AskUserQuestionComponent implements Component {
   }
 
   private submit(): void {
+    if (!this.allConfirmed()) return;
     this._resolved = true;
     this.done(this.buildResult());
   }
@@ -556,10 +563,7 @@ export class AskUserQuestionComponent implements Component {
           // Empty text — clear any previously saved free-text answer
           state.freeTextValue = null;
           // If nothing left selected either, un-confirm
-          const q = this.questions[this.activeTab];
-          if (q.multiSelect && state.selectedIndices.size === 0) {
-            state.confirmed = false;
-          }
+          if (!this.hasAnswer(q, state)) state.confirmed = false;
           this.exitEditMode(false);
           this.tui.requestRender();
         }

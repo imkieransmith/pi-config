@@ -3,7 +3,7 @@ import { createEditToolDefinition, createWriteToolDefinition, type ExtensionAPI,
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createTwoFilesPatch } from "diff";
 import { redact_text, redact_value } from "../redact.ts";
-import { countNote, row } from "./renderers.ts";
+import { countNote, row } from "../shared/tool-rows.ts";
 
 const MAX_PREVIEW_BYTES = 256_000;
 const MAX_DIFF_CHARS = 32_000;

@@ -45,9 +45,10 @@ function preview(value: string, max = 500): string {
 
 async function git(args: string[], cwd: string): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
+    const { stdout } = await execFileAsync('git', ['-C', cwd, '--literal-pathspecs', ...args], {
       encoding: 'utf-8', timeout: 2000, maxBuffer: 1024 * 1024,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+      env: { ...env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
     });
     return stdout.trim();
   } catch { return undefined; }
@@ -62,10 +63,9 @@ type GitRecoverability =
 	| 'untracked'
 	| 'not-git';
 
-async function get_git_recoverability(
-	cwd: string,
-	path: string,
-): Promise<GitRecoverability> {
+async function get_git_recoverability(absolute: string): Promise<GitRecoverability> {
+	const cwd = dirname(absolute);
+	const path = absolute;
 	if (!await is_git_repo(cwd)) return 'not-git';
 
 	const status = await git(['status', '--porcelain=v1', '--', path], cwd);
@@ -80,15 +80,11 @@ async function get_git_recoverability(
 	return tracked ? 'tracked-clean' : 'untracked';
 }
 
-async function is_git_recoverable(cwd: string, path: string): Promise<boolean> {
-	return await get_git_recoverability(cwd, path) === 'tracked-clean';
-}
-
 async function is_git_tracked(absolute: string): Promise<boolean> {
 	// Edit policy trusts tracked files, including uncommitted work. Resolve the
 	// actual file's repository and treat its name literally, not as a path pattern.
 	return await git([
-		'--literal-pathspecs', 'ls-files', '--error-unmatch', '--', absolute,
+		'ls-files', '--error-unmatch', '--', absolute,
 	], dirname(absolute)) !== undefined;
 }
 
@@ -102,14 +98,15 @@ async function assess_file_write(
 	session_created_paths: ReadonlySet<string> = new Set(),
 ): Promise<DestructiveAction | undefined> {
 	if (typeof path !== 'string' || !path.trim()) return undefined;
-	if (is_todo_planning_note(path)) return undefined;
 	const absolute = await resolveSecurityPath(path, cwd);
+	if (is_todo_planning_note(absolute)) return undefined;
 	if (!existsSync(absolute)) return undefined;
 	if (session_created_paths.has(absolute)) return undefined;
-	if (await is_git_recoverable(cwd, path)) return undefined;
+	const recoverability = await get_git_recoverability(absolute);
+	if (recoverability === 'tracked-clean') return undefined;
 
 	const reason =
-		await get_git_recoverability(cwd, path) === 'tracked-dirty'
+		recoverability === 'tracked-dirty'
 			? 'Overwrites a file with uncommitted changes'
 			: 'Overwrites an untracked file git cannot restore';
 
@@ -145,8 +142,8 @@ async function assess_file_edit(
 		return undefined;
 	}
 	if (path) {
-		if (is_todo_planning_note(path)) return undefined;
 		const absolute = await resolveSecurityPath(path, cwd);
+		if (is_todo_planning_note(absolute)) return undefined;
 		if (session_created_paths.has(absolute) || await is_git_tracked(absolute)) return undefined;
 	}
 

@@ -4,7 +4,7 @@
  * Original - https://github.com/tomsej/pi-ext/tree/main/extensions/ask-user-question
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { countNote, getText, row } from "../tool-pills/renderers.ts";
+import { countNote, getText, row } from "../shared/tool-rows.ts";
 import { AskUserQuestionComponent } from "./component.ts";
 import { InputSchema, type Question, type Result } from "./schema.ts";
 
