@@ -1,4 +1,4 @@
-export const ADVISOR_BRIEF_MAX_CHARS = 2_000;
+export const ADVISOR_BRIEF_MAX_CHARS = 2_500;
 
 export function normalizeAdvisorBrief(value: string): string {
 	const brief = value.trim();

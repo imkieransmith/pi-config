@@ -112,14 +112,14 @@ function registerAdvisorTool(pi: ExtensionAPI): void {
 		description: "Ask the advisor for one next step or a check of your approach. Call it after two failed tries, before a change that is hard to undo, when you cannot choose between options, or when you want to check your plan. Pass a short brief with what you are doing and what you want checked.",
 		promptSnippet: "Ask the advisor after two failed tries, before a change that is hard to undo, when you cannot choose between options, or when you want to check your plan.",
 		promptGuidelines: [
-			"When you call `advisor`, pass a short brief that says what you are doing, any steps tried or planned, and what you want checked.",
+			"When you call `advisor`, aim to keep the brief under 2,000 characters. Say what you are doing, any steps tried or planned, and what you want checked.",
 			"Check its advice against the code, tool results, and tests. Call it again only after you try its advice or learn something new.",
 		],
 		parameters: Type.Object({
 			brief: Type.String({
 				minLength: 1,
 				maxLength: ADVISOR_BRIEF_MAX_CHARS,
-				description: "State what you are doing, any steps tried or planned, and what you want the advisor to check.",
+				description: "State what you are doing, any steps tried or planned, and what you want the advisor to check. Aim for under 2,000 characters.",
 			}),
 		}),
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {

@@ -22,7 +22,7 @@ test("accepts the limit and rejects longer text", () => {
 	assert.equal(normalizeAdvisorBrief("a".repeat(ADVISOR_BRIEF_MAX_CHARS)).length, ADVISOR_BRIEF_MAX_CHARS);
 	assert.throws(
 		() => normalizeAdvisorBrief("a".repeat(ADVISOR_BRIEF_MAX_CHARS + 1)),
-		/advisor brief must be at most 2,000 characters/,
+		/advisor brief must be at most 2,500 characters/,
 	);
 });
 
