@@ -20,6 +20,9 @@
     ],
     "skills": [
       "./agent/skills"
+    ],
+    "themes": [
+      "./agent/themes"
     ]
   },
   "dependencies": {

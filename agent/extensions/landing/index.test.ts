@@ -17,13 +17,13 @@ function setup(t: TestContext) {
 		fg: (_role: string, s: string) => `\x1b[38;2;105;113;113m${s}\x1b[39m`,
 		bold: (s: string) => `\x1b[1m${s}\x1b[22m`, italic: (s: string) => `\x1b[3m${s}\x1b[23m`,
 	} as Theme;
-	const queries: { resolve: (colour: { r: number; g: number; b: number } | undefined) => void; reject: (error: Error) => void }[] = [];
+	const queries: { resolve: (colours: { background?: { r: number; g: number; b: number } }) => void; reject: (error: Error) => void; late: (colours: { background?: { r: number; g: number; b: number } }) => void }[] = [];
 	const headers: Header[] = [];
 	const tui = {
 		terminal: { rows: 53 },
 		requestRender() { renders++; },
-		queryTerminalBackgroundColor() {
-			return new Promise<{ r: number; g: number; b: number } | undefined>((resolve, reject) => queries.push({ resolve, reject }));
+		queryTerminalColors({ onLateReply }: { onLateReply: (colours: { background?: { r: number; g: number; b: number } }) => void }) {
+			return new Promise<{ background?: { r: number; g: number; b: number } }>((resolve, reject) => queries.push({ resolve, reject, late: onLateReply }));
 		},
 	};
 	const ctx = {
@@ -113,24 +113,28 @@ test("background replies redraw the active header but ignore disposed ones", asy
 	old.render(144);
 	h.start();
 	const current = h.headers[1], light = current.render(144);
-	h.queries[0].resolve({ r: 0, g: 0, b: 0 });
+	h.queries[0].resolve({ background: { r: 0, g: 0, b: 0 } });
 	await Promise.resolve();
 	assert.equal(h.renders(), 0);
 	assert.equal(current.render(144), light);
 	h.emit("agent_start");
-	h.queries[1].resolve({ r: 24, g: 24, b: 24 });
+	h.queries[1].resolve({ background: { r: 24, g: 24, b: 24 } });
 	await Promise.resolve();
 	assert.equal(h.renders(), 1);
 	assert.notDeepEqual(current.render(144), light, "A background reply still updates a frozen frame");
+	h.queries[1].late({ background: { r: 40, g: 40, b: 40 } });
+	assert.equal(h.renders(), 2);
 	h.start();
 	h.headers[2].dispose();
-	h.queries[2].resolve({ r: 255, g: 255, b: 255 });
+	h.queries[2].resolve({ background: { r: 255, g: 255, b: 255 } });
 	await Promise.resolve();
-	assert.equal(h.renders(), 1);
+	assert.equal(h.renders(), 2);
 	h.start();
 	h.queries[3].reject(new Error("Unsupported terminal query"));
 	await Promise.resolve();
 	assert.ok(h.headers[3].render(144).length > 0);
+	h.queries[3].late({});
+	assert.equal(h.renders(), 2);
 });
 
 test("landing handles resize and narrow widths without splitting styled Unicode", t => {

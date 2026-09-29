@@ -39,6 +39,8 @@ npm run setup
 
 This adds missing keys from `agent/base-settings.json` to your local `agent/settings.json`. It keeps the values you already set.
 
+The `classic-light` theme in `agent/themes/` is Pi's `light` theme from before 0.99, without the purple accents. Select it in `/settings` if you already have a different theme saved.
+
 You can also install the extensions directly:
 
 ```bash

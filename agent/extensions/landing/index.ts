@@ -5,7 +5,7 @@
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { VERSION } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, type TerminalColors } from "@earendil-works/pi-tui";
 import { basename } from "node:path";
 import { composite, paintClouds, renderRow, type RGB, type CloudBank } from "./cloud-bank.ts";
 
@@ -112,13 +112,15 @@ export default function (pi: ExtensionAPI) {
 			};
 			stop = freeze;
 
-			// Blend the paint into the terminal's real background colour.
-			tui.queryTerminalBackgroundColor({ timeoutMs: 500 }).then((c) => {
+			// Blend the paint into the terminal's real background colour, including late replies.
+			const useBackground = (colours: TerminalColors) => {
+				const c = colours.background;
 				if (!c || disposed) return;
 				paper = [c.r, c.g, c.b];
 				drawn = undefined;
 				tui.requestRender();
-			}, () => {});
+			};
+			tui.queryTerminalColors({ timeoutMs: 500, onLateReply: useBackground }).then(useBackground, () => {});
 
 			const where = () => describeWhere(ctx.cwd, ctx.model?.id, pi.getThinkingLevel());
 

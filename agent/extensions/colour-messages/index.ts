@@ -121,12 +121,15 @@ export function patchRender(
  * shows as an unpainted line between two coloured blocks. Skip it while
  * drawing when both neighbours are coloured, since they carry their own
  * padding. Plain status lines (reload notices, errors) keep it as their gap.
+ * Tool rows drop their native gap, so restore one after plain notices.
  * Deciding at draw time also covers messages added before this patch loaded.
  */
-export function dropGapsBetweenBlocks(
+export function spaceMessageBlocks(
 	container: { prototype: { render(width: number): string[] } },
 	opensBlock: Array<new (...args: any[]) => unknown>,
 	paintedBlock: Array<new (...args: any[]) => unknown>,
+	Tool: new (...args: any[]) => unknown,
+	Spacer: new (lines: number) => unknown,
 ): () => void {
 	const original = container.prototype.render;
 	const isPainted = (item: any) =>
@@ -135,8 +138,11 @@ export function dropGapsBetweenBlocks(
 		const children = this.children;
 		const kept = children.filter((child: any, i) =>
 			!(child?.constructor?.name === "Spacer" && isPainted(children[i - 1]) && opensBlock.some((type) => children[i + 1] instanceof type)));
-		if (kept.length === children.length) return original.call(this, width);
-		this.children = kept;
+		const spaced = kept.flatMap((child, i) =>
+			child instanceof Tool && kept[i - 1]?.constructor?.name === "ThemedText"
+				? [new Spacer(1), child] : [child]);
+		if (spaced.length === children.length && spaced.every((child, i) => child === children[i])) return original.call(this, width);
+		this.children = spaced;
 		try {
 			return original.call(this, width);
 		} finally {
@@ -158,10 +164,10 @@ export function dropGapsBetweenBlocks(
 //
 // Fragility / maintenance — this WILL break if pi changes any of:
 //   - the `dist/bundle/cli.js` / `cli-runtime.js` entrypoint shape,
-//   - the main chunk's exported class names (UserMessageComponent,
-//     AssistantMessageComponent, ToolExecutionComponent, Container),
-//   - the unexported Spacer class keeping its name, and Pi adding one to
-//     chatContainer just before each user message and summary block,
+//   - the main chunk's exported message class names, and the TUI chunk's Container export,
+//   - the unexported ThemedText class keeping its name for plain notices,
+//   - the Spacer class keeping its name, and Pi adding one to chatContainer
+//     just before each user message and summary block,
 //   - those classes' `render(width)` methods,
 //   - AssistantMessageComponent's `hasToolCalls` field used to tell an
 //     intermediate working turn from a final response.
@@ -169,7 +175,7 @@ export function dropGapsBetweenBlocks(
 // upgrade; a non-patching fix would require pi to expose a public row-styling or
 // render hook.
 // ===========================================================================
-function resolvePiRuntimeModuleUrl(): string {
+function resolvePiRuntimeModuleUrls(): { main: string; tui: string } {
 	if (!process.argv[1]) {
 		throw new Error("Could not locate the running pi CLI entrypoint: process.argv[1] is empty");
 	}
@@ -204,7 +210,15 @@ function resolvePiRuntimeModuleUrl(): string {
 		throw new Error(`Could not locate pi's main bundle chunk import in: ${runtimePath}`);
 	}
 
-	return new URL(mainChunkImport[1], pathToFileURL(runtimePath)).href;
+	const tuiChunkImport = runtimeSource.match(/import\{[^}]*\bAPP_NAME\b[^}]*\}from"([^"]+)"/);
+	if (!tuiChunkImport?.[1]) {
+		throw new Error(`Could not locate pi's TUI bundle chunk import in: ${runtimePath}`);
+	}
+
+	return {
+		main: new URL(mainChunkImport[1], pathToFileURL(runtimePath)).href,
+		tui: new URL(tuiChunkImport[1], pathToFileURL(runtimePath)).href,
+	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -218,13 +232,21 @@ export default function (pi: ExtensionAPI) {
     const colours = {
       user: hexToBgAnsi(USER_COLOUR), work: theme.getBgAnsi("customMessageBg"), assistant: hexToBgAnsi(ASSISTANT_COLOUR),
     };
+    const { main, tui } = resolvePiRuntimeModuleUrls();
+    const [messages, layout] = await Promise.all([import(main), import(tui)]);
     const {
-      UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent, Container,
+      UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent,
       CompactionSummaryMessageComponent, BranchSummaryMessageComponent,
-    } = await import(resolvePiRuntimeModuleUrl());
+    } = messages;
+    const { Container, Spacer } = layout;
+    for (const [name, type] of Object.entries({ Container, Spacer, UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent, CompactionSummaryMessageComponent, BranchSummaryMessageComponent })) {
+      if (typeof type !== "function" || typeof type.prototype?.render !== "function") {
+        throw new Error(`Pi's bundled ${name} renderer is missing; update colour-messages for this pi version`);
+      }
+    }
     const summaries = [CompactionSummaryMessageComponent, BranchSummaryMessageComponent];
     undo = [
-      dropGapsBetweenBlocks(Container, [UserMessageComponent, ...summaries], summaries),
+      spaceMessageBlocks(Container, [UserMessageComponent, ...summaries], summaries, ToolExecutionComponent, Spacer),
       // Pi paints user messages with the theme's userMessageBg; swap it for ours.
       patchRender(UserMessageComponent.prototype, "user", colours, { swap: [theme.getBgAnsi("userMessageBg")] }),
       // Tool rows carry their own top/bottom padding (tool-pills), so drop Pi's blank line above each one.

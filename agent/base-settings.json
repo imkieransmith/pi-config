@@ -1,5 +1,5 @@
 {
-  "theme": "light",
+  "theme": "classic-light",
   "tuiMode": "fullscreen",
   "quietStartup": true,
   "terminal": {
