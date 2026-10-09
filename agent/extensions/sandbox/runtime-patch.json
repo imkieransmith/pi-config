@@ -1,0 +1,86 @@
+{
+  "version": "0.0.77",
+  "reason": "Opt-in macOS Mach service registration for sandboxed Chromium. See https://github.com/anthropics/sandbox-runtime/issues/210. Source hashes pin this patch to the reviewed npm release.",
+  "files": [
+    {
+      "path": "dist/sandbox/sandbox-config.js",
+      "sha256": "ed6fc99632d80fd7663839162f3e78a8cb303ca379d73ae61d756ecbdf2194d7",
+      "edits": [
+        {
+          "oldText": "    allowMachLookup: z\n",
+          "newText": "    allowMachRegister: z\n        .array(z.string().refine(val => /^[A-Za-z0-9_][A-Za-z0-9_.-]*\\*?$/.test(val), {\n        message: 'Mach registration requires a service name, optionally ending in a single wildcard; a bare wildcard is not allowed.',\n    }))\n        .optional()\n        .describe('macOS only: Mach services to allow registering. Exact names or trailing-wildcard prefixes. Grants no lookup permission; ignored on Linux.'),\n    allowMachLookup: z\n",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "dist/sandbox/sandbox-config.d.ts",
+      "sha256": "574071cbd699a85e86969b29e5120b0931a5db4474c441ccf725a5b591975ff1",
+      "edits": [
+        {
+          "oldText": "\n    allowMachLookup: z.ZodOptional<z.ZodArray<z.ZodEffects<z.ZodString, string, string>, \"many\">>;",
+          "newText": "\n    allowMachRegister: z.ZodOptional<z.ZodArray<z.ZodEffects<z.ZodString, string, string>, \"many\">>;\n    allowMachLookup: z.ZodOptional<z.ZodArray<z.ZodEffects<z.ZodString, string, string>, \"many\">>;",
+          "count": 1
+        },
+        {
+          "oldText": "\n        allowMachLookup: z.ZodOptional<z.ZodArray<z.ZodEffects<z.ZodString, string, string>, \"many\">>;",
+          "newText": "\n        allowMachRegister: z.ZodOptional<z.ZodArray<z.ZodEffects<z.ZodString, string, string>, \"many\">>;\n        allowMachLookup: z.ZodOptional<z.ZodArray<z.ZodEffects<z.ZodString, string, string>, \"many\">>;",
+          "count": 1
+        },
+        {
+          "oldText": "\n    allowMachLookup?: string[] | undefined;",
+          "newText": "\n    allowMachRegister?: string[] | undefined;\n    allowMachLookup?: string[] | undefined;",
+          "count": 2
+        },
+        {
+          "oldText": "\n        allowMachLookup?: string[] | undefined;",
+          "newText": "\n        allowMachRegister?: string[] | undefined;\n        allowMachLookup?: string[] | undefined;",
+          "count": 6
+        }
+      ]
+    },
+    {
+      "path": "dist/sandbox/sandbox-manager.js",
+      "sha256": "82b29f47069cad78e6ad1aed0937ee34259e7bd9862508419543eb8cdf99c6e8",
+      "edits": [
+        {
+          "oldText": "                allowMachLookup: getAllowMachLookup(),",
+          "newText": "                allowMachLookup: getAllowMachLookup(),\n                allowMachRegister: config?.network?.allowMachRegister,",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "dist/sandbox/macos-sandbox-utils.js",
+      "sha256": "d1564baa290f6946c00d2cbcdfe28b0152a88e61dc9dcc56138d181f51f70fe0",
+      "edits": [
+        {
+          "oldText": "allowMachLookup, ",
+          "newText": "allowMachLookup, allowMachRegister, ",
+          "count": 2
+        },
+        {
+          "oldText": "        allowMachLookup,\n",
+          "newText": "        allowMachLookup,\n        allowMachRegister,\n",
+          "count": 1
+        },
+        {
+          "oldText": "        '; POSIX IPC - shared memory',",
+          "newText": "        ...(allowMachRegister && allowMachRegister.length > 0\n            ? [\n                '; User-specified Mach service registration (Pi patch)',\n                ...allowMachRegister.map(name => name.endsWith('*')\n                    ? `(allow mach-register (global-name-prefix ${escapePath(name.slice(0, -1))}))`\n                    : `(allow mach-register (global-name ${escapePath(name)}))`),\n            ]\n            : []),\n        '',\n        '; POSIX IPC - shared memory',",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "dist/sandbox/macos-sandbox-utils.d.ts",
+      "sha256": "8f882ba4d7e2d8a523713990a284045a4b22fe239b82c8ecfd85bbf2589d86df",
+      "edits": [
+        {
+          "oldText": "    allowMachLookup?: string[];",
+          "newText": "    allowMachLookup?: string[];\n    allowMachRegister?: string[];",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

@@ -49,6 +49,19 @@ pi install git:github.com/imkieransmith/pi-config
 
 I recommend copying the parts you want into your own config and building on top of them instead. That's how this repo evolved in the first place, and it makes it much easier to fully understand, customise, and maintain your own setup long term.
 
+## Browser checks
+
+Install shared Playwright once in your terminal:
+
+```bash
+npm install --global --prefix "$HOME/.local" playwright
+"$HOME/.local/bin/playwright" install chromium
+```
+
+Keep `~/.local/bin` on your PATH. Agents reuse this install and its cached browser.
+
+`npm install` applies the sandbox's macOS browser patch. If you skip install scripts, run `npm run setup:sandbox`. Fully restart Pi after applying it.
+
 ## License
 
 MIT. Source credits for code from other Pi users are in the relevant files.

@@ -12,7 +12,9 @@
     "test": "node --import ./agent/extensions/tests/register.mjs --test \"agent/extensions/**/*.test.ts\"",
     "test:integration": "node --import ./agent/extensions/tests/register.mjs --test agent/extensions/tests/integration.test.mjs",
     "typecheck": "node agent/extensions/tests/typecheck.mjs",
-    "setup": "node agent/setup.ts"
+    "setup": "node agent/setup.ts",
+    "setup:sandbox": "node agent/extensions/sandbox/runtime-patch.ts",
+    "postinstall": "npm run setup:sandbox"
   },
   "pi": {
     "extensions": [
@@ -26,7 +28,7 @@
     ]
   },
   "dependencies": {
-    "@anthropic-ai/sandbox-runtime": "^0.0.77",
+    "@anthropic-ai/sandbox-runtime": "0.0.77",
     "@shikijs/cli": "^4.0.2",
     "diff": "^9.0.0"
   },
