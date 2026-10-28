@@ -8,12 +8,15 @@
  * Leave loaders alone: Pi also uses them inside the editor's top border.
  */
 
-import { readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
-
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+	AssistantMessageComponent,
+	BranchSummaryMessageComponent,
+	CompactionSummaryMessageComponent,
+	type ExtensionAPI,
+	ToolExecutionComponent,
+	UserMessageComponent,
+} from "@earendil-works/pi-coding-agent";
+import { Container, Spacer, visibleWidth } from "@earendil-works/pi-tui";
 
 type RenderablePrototype = {
 	render?: (width: number) => string[];
@@ -83,7 +86,7 @@ export function joinFinalResponse(host: unknown): void {
 }
 
 export function patchRender(
-	prototype: RenderablePrototype & Record<PropertyKey, unknown>,
+	target: object,
 	modeForInstance: PaintMode | ((instance: any) => PaintMode),
 	colours: Record<PaintMode, string>,
 	{ swap, dropLeadingBlank = false, endWithBlank }: {
@@ -93,7 +96,8 @@ export function patchRender(
 		endWithBlank?: (instance: any) => boolean;
 	} = {},
 ): () => void {
-  if (!prototype?.render) return () => {};
+  const prototype = target as RenderablePrototype & Record<PropertyKey, unknown>;
+  if (!prototype.render) return () => {};
   const original = (prototype[ORIGINAL_RENDER] as typeof prototype.render | undefined) ?? prototype.render;
 	prototype[ORIGINAL_RENDER] = original;
 	prototype[PATCHED] = true;
@@ -156,94 +160,29 @@ export function spaceMessageBlocks(
 }
 
 // ===========================================================================
-// MONKEY-PATCH (pi internals): this extension overrides the `render()` method on
-// pi's private message components. The CLI bundles those classes into a
-// hashed chunk, so importing the unbundled files under `dist/modes` would patch
-// different class objects and have no effect. The CLI entrypoint now loads
-// cli-runtime.js, which imports the main chunk. Import that same module instance.
+// MONKEY-PATCH (pi internals): this extension overrides `render()` on pi's
+// message components. Pi gives extensions the same live modules it uses itself,
+// so the classes imported above are the ones pi draws with.
 //
-// Fragility / maintenance — this WILL break if pi changes any of:
-//   - the `dist/bundle/cli.js` / `cli-runtime.js` entrypoint shape,
-//   - the main chunk's exported message class names, and the TUI chunk's Container export,
+// Still relies on pi internals that may change:
 //   - the unexported ThemedText class keeping its name for plain notices,
-//   - the Spacer class keeping its name, and Pi adding one to chatContainer
-//     just before each user message and summary block,
-//   - those classes' `render(width)` methods,
+//   - Pi adding a Spacer to chatContainer just before each user message and
+//     summary block,
+//   - those classes' `render(width)` methods and Container's `children`,
 //   - AssistantMessageComponent's `hasToolCalls` field used to tell an
 //     intermediate working turn from a final response.
-// Failures are made loud on purpose. Re-verify these assumptions on every pi
-// upgrade; a non-patching fix would require pi to expose a public row-styling or
-// render hook.
 // ===========================================================================
-function resolvePiRuntimeModuleUrls(): { main: string; tui: string } {
-	if (!process.argv[1]) {
-		throw new Error("Could not locate the running pi CLI entrypoint: process.argv[1] is empty");
-	}
-
-	let cliPath = process.argv[1];
-	try {
-		cliPath = realpathSync(cliPath);
-	} catch {
-		// Keep the original path so the error below includes the path pi provided.
-	}
-
-	const bundleDir = dirname(cliPath);
-	const distDir = dirname(bundleDir);
-	if (
-		basename(cliPath) !== "cli.js" ||
-		basename(bundleDir) !== "bundle" ||
-		basename(distDir) !== "dist" ||
-		!cliPath.includes("@earendil-works/pi-coding-agent")
-	) {
-		throw new Error(`Could not locate pi's bundled CLI from running entrypoint: ${cliPath}`);
-	}
-
-	const cliSource = readFileSync(cliPath, "utf8");
-	if (!cliSource.includes('createRequire(import.meta.url)("./cli-runtime.js")')) {
-		throw new Error(`Could not locate pi's CLI runtime loader in: ${cliPath}`);
-	}
-
-	const runtimePath = join(bundleDir, "cli-runtime.js");
-	const runtimeSource = readFileSync(runtimePath, "utf8");
-	const mainChunkImport = runtimeSource.match(/import\{[^}]*\bmain\b[^}]*\}from"([^"]+)"/);
-	if (!mainChunkImport?.[1]) {
-		throw new Error(`Could not locate pi's main bundle chunk import in: ${runtimePath}`);
-	}
-
-	const tuiChunkImport = runtimeSource.match(/import\{[^}]*\bAPP_NAME\b[^}]*\}from"([^"]+)"/);
-	if (!tuiChunkImport?.[1]) {
-		throw new Error(`Could not locate pi's TUI bundle chunk import in: ${runtimePath}`);
-	}
-
-	return {
-		main: new URL(mainChunkImport[1], pathToFileURL(runtimePath)).href,
-		tui: new URL(tuiChunkImport[1], pathToFileURL(runtimePath)).href,
-	};
-}
-
 export default function (pi: ExtensionAPI) {
   let undo: Array<() => void> = [];
   const restore = () => { for (const dispose of undo) dispose(); undo = []; };
   pi.on("session_shutdown", restore);
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", (_event, ctx) => {
     restore();
     if (ctx.mode !== "tui") return;
     const theme = ctx.ui.theme;
     const colours = {
       user: hexToBgAnsi(USER_COLOUR), work: theme.getBgAnsi("customMessageBg"), assistant: hexToBgAnsi(ASSISTANT_COLOUR),
     };
-    const { main, tui } = resolvePiRuntimeModuleUrls();
-    const [messages, layout] = await Promise.all([import(main), import(tui)]);
-    const {
-      UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent,
-      CompactionSummaryMessageComponent, BranchSummaryMessageComponent,
-    } = messages;
-    const { Container, Spacer } = layout;
-    for (const [name, type] of Object.entries({ Container, Spacer, UserMessageComponent, AssistantMessageComponent, ToolExecutionComponent, CompactionSummaryMessageComponent, BranchSummaryMessageComponent })) {
-      if (typeof type !== "function" || typeof type.prototype?.render !== "function") {
-        throw new Error(`Pi's bundled ${name} renderer is missing; update colour-messages for this pi version`);
-      }
-    }
     const summaries = [CompactionSummaryMessageComponent, BranchSummaryMessageComponent];
     undo = [
       spaceMessageBlocks(Container, [UserMessageComponent, ...summaries], summaries, ToolExecutionComponent, Spacer),
