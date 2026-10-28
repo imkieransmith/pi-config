@@ -9,6 +9,9 @@
  * - Pi's own secrets and sessions stay hidden even when the project is ~/.pi.
  * - Network: listed domains, the project's Herd `<folder>.test` site, and any
  *   localhost port (needed for databases and dev servers).
+ * - Processes: commands may signal any of your processes (runtime patch), since
+ *   each command gets a new sandbox. Listing them (ps, pgrep, pkill) stays blocked.
+ * - File watching: macOS file events are allowed, so dev servers see edits.
  * - Environment variables that look like secrets are dropped.
  *
  * Fails closed: if the sandbox can't start, the command doesn't run.
@@ -29,7 +32,11 @@ export const SANDBOX_NOTE =
   "Commands run in a sandbox. 'Operation not permitted' or a proxy 403 means the sandbox blocked it; tell the user instead of working around it. " +
   "For browser checks, first check for the shared `playwright` command. Reuse it and its cached Chromium instead of installing per task. " +
   "For CommonJS scripts, run `PLAYWRIGHT_CLI=\"$(command -v playwright)\" node script.cjs` and load Playwright with `require(require('node:path').dirname(require('node:fs').realpathSync(process.env.PLAYWRIGHT_CLI)))`. " +
-  "Do not assume npm root -g points to the shared install. If the shared install is missing, tell the user.";
+  "Do not assume npm root -g points to the shared install. If the shared install is missing, tell the user. " +
+  "Chromium ignores the proxy env vars, so pages can't load outside files (such as web fonts) unless you launch with " +
+  "`const u = new URL(process.env.HTTPS_PROXY); chromium.launch({ proxy: { server: u.origin, username: decodeURIComponent(u.username), password: decodeURIComponent(u.password), bypass: 'localhost,127.0.0.1' } })`. " +
+  "Background servers keep running between calls and reload on file changes, so reuse one. " +
+  "ps, pgrep and pkill can't list processes here; stop one with `kill $(lsof -ti :PORT)` or a saved `$!`.";
 
 export function sandboxConfig(cwd: string): SandboxRuntimeConfig {
   const browserCache = process.platform === "darwin"
@@ -44,6 +51,7 @@ export function sandboxConfig(cwd: string): SandboxRuntimeConfig {
         "cdn.playwright.dev", "playwright.download.prss.microsoft.com",
         // Chromium downloads redirect here. Rules allow hosts, not individual storage buckets.
         "storage.googleapis.com",
+        "fonts.googleapis.com", "fonts.gstatic.com",
         `${path.basename(cwd).toLowerCase()}.test`, "127.0.0.1:80", "127.0.0.1:443",
       ],
       deniedDomains: [],
@@ -52,7 +60,8 @@ export function sandboxConfig(cwd: string): SandboxRuntimeConfig {
       // Namespace-wide, not PID-specific. Both operations use the same narrow prefix.
       ...(process.platform === "darwin" ? {
         allowMachRegister: ["org.chromium.Chromium.MachPortRendezvousServer.*"],
-        allowMachLookup: ["org.chromium.Chromium.MachPortRendezvousServer.*"],
+        // FSEvents backs Node's fs.watch on macOS. Without it, watchers fail and dev servers serve stale files.
+        allowMachLookup: ["org.chromium.Chromium.MachPortRendezvousServer.*", "com.apple.FSEvents"],
       } : {}),
     },
     filesystem: {

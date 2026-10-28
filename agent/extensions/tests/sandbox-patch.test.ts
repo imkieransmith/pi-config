@@ -127,6 +127,12 @@ test("profile grants only the requested registration and preserves other restric
   ));
 });
 
+test("commands may signal processes from earlier commands", () => {
+  assert.match(profile(), /\n\(allow signal\)\n/);
+  assert.doesNotMatch(profile(), /same-sandbox\)\)\n\(allow mach-priv/);
+  assert.doesNotMatch(profile(), /\(allow process-info\*\)/);
+});
+
 test("exact registration names stay exact and profile strings are escaped", () => {
   assert.ok(profile([`${prefix}123`]).includes(`(allow mach-register (global-name "${prefix}123"))`));
   const quoted = 'test.\"quoted\\name';

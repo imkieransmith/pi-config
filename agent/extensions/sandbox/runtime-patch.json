@@ -1,6 +1,6 @@
 {
   "version": "0.0.77",
-  "reason": "Opt-in macOS Mach service registration for sandboxed Chromium. See https://github.com/anthropics/sandbox-runtime/issues/210. Source hashes pin this patch to the reviewed npm release.",
+  "reason": "Opt-in macOS Mach service registration for sandboxed Chromium (see https://github.com/anthropics/sandbox-runtime/issues/210), and signals to any of the user's processes, since each command gets a new sandbox and could not stop servers from earlier commands. Source hashes pin this patch to the reviewed npm release.",
   "files": [
     {
       "path": "dist/sandbox/sandbox-config.js",
@@ -54,6 +54,11 @@
       "path": "dist/sandbox/macos-sandbox-utils.js",
       "sha256": "d1564baa290f6946c00d2cbcdfe28b0152a88e61dc9dcc56138d181f51f70fe0",
       "edits": [
+        {
+          "oldText": "        '(allow signal (target same-sandbox))',\n",
+          "newText": "        '; Pi patch: each command gets a new sandbox, so let it stop processes from earlier commands',\n        '(allow signal)',\n",
+          "count": 1
+        },
         {
           "oldText": "allowMachLookup, ",
           "newText": "allowMachLookup, allowMachRegister, ",

@@ -25,6 +25,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     ...tool,
     description: `${tool.description}\n\n${SANDBOX_NOTE}`,
+    // Pi runs one message's tool calls in parallel by default, so a read could
+    // race the command that writes its file. Any batch with bash runs in order.
+    executionMode: "sequential",
     async execute(id, args, signal, _update, ctx) {
       const command = await rtkRewrite(args.command, signal);
       // Withhold raw streaming text; final output is redacted before display/storage.

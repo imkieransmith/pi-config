@@ -11,6 +11,7 @@ test("browser downloads allow exact hosts without broad vendor wildcards", () =>
     "packagist.org", "*.packagist.org",
     "registry.npmjs.org", "registry.yarnpkg.com",
     "cdn.playwright.dev", "playwright.download.prss.microsoft.com", "storage.googleapis.com",
+    "fonts.googleapis.com", "fonts.gstatic.com",
     "layout-project.test", "127.0.0.1:80", "127.0.0.1:443",
   ]);
 });
@@ -32,7 +33,7 @@ for (const [platform, xdg, cache] of [
       assert.deepEqual(network.allowMachRegister, platform === "darwin"
         ? ["org.chromium.Chromium.MachPortRendezvousServer.*"] : undefined);
       assert.deepEqual(network.allowMachLookup, platform === "darwin"
-        ? ["org.chromium.Chromium.MachPortRendezvousServer.*"] : undefined);
+        ? ["org.chromium.Chromium.MachPortRendezvousServer.*", "com.apple.FSEvents"] : undefined);
       assert.ok(filesystem.allowRead?.includes(cache));
       assert.ok(filesystem.allowWrite.includes(cache));
       assert.ok(!filesystem.allowRead?.includes("~/Library/Caches"));
